@@ -1,7 +1,7 @@
 # Kit
-[![Test](https://github.com/dlmiddlecote/kit/workflows/Test/badge.svg)](https://github.com/dlmiddlecote/kit/actions?query=workflow%3ATest)
-[![codecov](https://codecov.io/gh/dlmiddlecote/kit/branch/main/graph/badge.svg)](https://codecov.io/gh/dlmiddlecote/kit)
-[![PkgGoDev](https://pkg.go.dev/badge/github.com/dlmiddlecote/kit)](https://pkg.go.dev/github.com/dlmiddlecote/kit)
+[![Test](https://github.com/Ometria/ometria.kit/workflows/Test/badge.svg)](https://github.com/Ometria/ometria.kit/actions?query=workflow%3ATest)
+[![codecov](https://codecov.io/gh/Ometria/ometria.kit/branch/main/graph/badge.svg)](https://codecov.io/gh/Ometria/ometria.kit)
+[![PkgGoDev](https://pkg.go.dev/badge/github.com/Ometria/ometria.kit)](https://pkg.go.dev/github.com/Ometria/ometria.kit)
 
 A collection of building blocks for Go apps 🧱.
 

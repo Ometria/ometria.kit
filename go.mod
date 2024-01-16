@@ -1,4 +1,4 @@
-module github.com/dlmiddlecote/kit
+module github.com/Ometria/ometria.kit
 
 go 1.14
 
