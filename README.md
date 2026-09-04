@@ -47,3 +47,23 @@ func main() {
     ...
 }
 ```
+
+### package clientip
+
+Resolves the real client IP of an incoming request behind one or more trusted proxies, by walking
+the `X-Forwarded-For` chain and stopping at the first untrusted hop. Ported from
+`ometria.js_tracker_pipeline`'s `getIPAddress`/`ipIsTrusted`, which has run this exact logic in
+production on every tracked page view for years — extracted here so a second service needing the
+same trust decision doesn't duplicate security-sensitive code a second time.
+
+#### Example
+
+```go
+var trustedMasks []*net.IPNet
+for _, cidr := range strings.Split(os.Getenv("TRUSTED_PROXY_CIDRS"), ",") {
+    _, mask, _ := net.ParseCIDR(strings.TrimSpace(cidr))
+    trustedMasks = append(trustedMasks, mask)
+}
+
+ip, _ := clientip.GetIPAddress(r, trustedMasks)
+```
