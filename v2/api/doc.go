@@ -25,9 +25,10 @@
 //     wrapped in Observe, passed to NewServer. Paths like "/accounts/:id"
 //     become "GET /accounts/{id}", and api.URLParam(r, "id") becomes
 //     r.PathValue("id").
-//   - Wrap the mux in V1Redirects to keep httptreemux's 301 redirects for
-//     trailing slashes and unclean paths; http.ServeMux alone responds 404 to
-//     "/push/" and 307 to "//push".
+//   - Wrap the mux in V1Redirects to keep httptreemux's redirects for
+//     trailing slashes and unclean paths, as 308s instead of 301s so POSTs
+//     survive them; http.ServeMux alone responds 404 to "/push/" and 307 to
+//     "//push".
 //   - Endpoint.SuppressLogs becomes Config.QuietRoutes.
 //   - CorsMiddleware is gone: wrap the handler with github.com/rs/cors
 //     directly, e.g. cors.Default().Handler(h).

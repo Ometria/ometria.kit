@@ -7,18 +7,18 @@ import (
 	"strings"
 )
 
-// V1Redirects keeps v1's (httptreemux's) handling of paths that only match a
-// route once they're tidied up, for services migrating from v1:
+// V1Redirects redirects the paths v1 (httptreemux) redirected, for services
+// migrating from v1:
 //
 //   - A trailing slash ("/push/") or an unclean path ("//push", "/a/../push")
 //     whose tidied path has a route for the request's method gets a
-//     301 Moved Permanently to that path, keeping the query string.
+//     308 Permanent Redirect to that path, keeping the query string.
 //     http.ServeMux on its own responds 404 to the first and 307 to the second.
 //   - A trailing slash whose path has routes only for other methods gets a
 //     405 Method Not Allowed, where http.ServeMux responds 404.
 //
-// Note that most clients follow a 301 for a POST by sending a GET, so these
-// redirects keep v1's behaviour rather than making such requests succeed.
+// v1 used 301, which most clients follow by turning a POST into a GET. 308
+// keeps the method and body, so a POST to "/push/" reaches "/push".
 func V1Redirects(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requested := r.URL.Path
@@ -46,7 +46,7 @@ func V1Redirects(mux *http.ServeMux) http.Handler {
 			}
 			if _, pattern := mux.Handler(withPath(r, candidate)); pattern != "" {
 				target := url.URL{Path: candidate, RawQuery: r.URL.RawQuery}
-				http.Redirect(w, r, target.String(), http.StatusMovedPermanently)
+				http.Redirect(w, r, target.String(), http.StatusPermanentRedirect)
 				return
 			}
 		}

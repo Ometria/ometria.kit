@@ -1,6 +1,7 @@
 package api
 
 import (
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -24,18 +25,18 @@ func TestV1Redirects(t *testing.T) {
 		{"GET", "/push", http.StatusMethodNotAllowed, ""},
 		{"GET", "/missing", http.StatusNotFound, ""},
 		// Trailing slash.
-		{"POST", "/push/", http.StatusMovedPermanently, "/push"},
-		{"POST", "/push/?dry_run=1", http.StatusMovedPermanently, "/push?dry_run=1"},
+		{"POST", "/push/", http.StatusPermanentRedirect, "/push"},
+		{"POST", "/push/?dry_run=1", http.StatusPermanentRedirect, "/push?dry_run=1"},
 		{"GET", "/push/", http.StatusMethodNotAllowed, ""},
-		{"GET", "/healthz/", http.StatusMovedPermanently, "/healthz"},
-		{"HEAD", "/healthz/", http.StatusMovedPermanently, "/healthz"},
+		{"GET", "/healthz/", http.StatusPermanentRedirect, "/healthz"},
+		{"HEAD", "/healthz/", http.StatusPermanentRedirect, "/healthz"},
 		{"GET", "/missing/", http.StatusNotFound, ""},
 		{"GET", "/static/", http.StatusOK, ""},
 		// Unclean paths.
-		{"POST", "//push", http.StatusMovedPermanently, "/push"},
-		{"POST", "/a/../push", http.StatusMovedPermanently, "/push"},
-		{"POST", "//push/", http.StatusMovedPermanently, "/push"},
-		{"GET", "/static//", http.StatusMovedPermanently, "/static/"},
+		{"POST", "//push", http.StatusPermanentRedirect, "/push"},
+		{"POST", "/a/../push", http.StatusPermanentRedirect, "/push"},
+		{"POST", "//push/", http.StatusPermanentRedirect, "/push"},
+		{"GET", "/static//", http.StatusPermanentRedirect, "/static/"},
 		{"GET", "//push", http.StatusMethodNotAllowed, ""},
 	}
 
@@ -54,6 +55,28 @@ func TestV1Redirects(t *testing.T) {
 				t.Errorf("expected Location %q, got %q", c.location, got)
 			}
 		})
+	}
+}
+
+func TestV1RedirectsLetFollowedPOSTsSucceed(t *testing.T) {
+	var body string
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /push", func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		body = string(b)
+		w.WriteHeader(http.StatusAccepted)
+	})
+	srv := httptest.NewServer(V1Redirects(mux))
+	defer srv.Close()
+
+	resp, err := srv.Client().Post(srv.URL+"/push/", "application/json", strings.NewReader(`[{"id":1}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if resp.StatusCode != http.StatusAccepted || body != `[{"id":1}]` {
+		t.Errorf("expected the followed POST to reach /push with its body, got %d and %q", resp.StatusCode, body)
 	}
 }
 
