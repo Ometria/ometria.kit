@@ -34,6 +34,23 @@ jobs:
           file: ./coverage.txt
           env_vars: OS,GOLANG
 
+  test-v2:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: v2/go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -v -race ./...
+
   golangci:
     name: lint
     runs-on: ubuntu-latest

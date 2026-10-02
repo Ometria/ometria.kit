@@ -5,7 +5,24 @@
 
 A collection of building blocks for Go apps 🧱.
 
-## Packages
+## v2 (draft)
+
+`github.com/Ometria/ometria.kit/v2/api` replaces the v1 framework with
+middleware for the standard library's `http.ServeMux`: one request log line,
+the same `http_request_duration_seconds` metric, and OpenTelemetry spans for
+every request, with the status code captured from the `ResponseWriter` so
+handlers can write responses however they like. See the package docs in
+[`v2/api/doc.go`](v2/api/doc.go) for usage and a v1 migration guide.
+
+```go
+mux := http.NewServeMux()
+mux.Handle("POST /push", pushHandler)
+
+srv := api.NewServer(":8080", api.Observe(api.Config{Logger: logger})(mux))
+srv.ListenAndServe()
+```
+
+## Packages (v1)
 
 ### package api
 
