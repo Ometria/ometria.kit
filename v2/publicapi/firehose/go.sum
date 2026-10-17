@@ -1,3 +1,5 @@
+github.com/Ometria/ometria.kit/v2 v2.0.0-alpha.1 h1:SNqEhrvVlOYkBnsa2rNquRktUzDdQ6Zdw3LzJzSfdXk=
+github.com/Ometria/ometria.kit/v2 v2.0.0-alpha.1/go.mod h1:BmHXBKRyczimWKW3611bcX8jOVIFqnsfxQ4L6YNkKoo=
 github.com/aws/aws-sdk-go-v2 v1.47.3 h1:HRoT/MkNi3bjO5xF4dCzLzvVmkvRGHj3/cLINDnJejk=
 github.com/aws/aws-sdk-go-v2 v1.47.3/go.mod h1:xSl+OSI5ZUw6bSMupWc218zE5Pl+65MCCu3ySWFY99A=
 github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6 h1:CqL8NN3p4I0JTwwV5MEoatIl4Y2amZ2X9dRD+0hbRL0=
