@@ -110,10 +110,9 @@ func ScopesFromContext(ctx context.Context) []string {
 //     account that isn't active. PHP has this branch but never reaches it,
 //     because api-accounts doesn't return inactive accounts.
 //
-// PHP retries a failed api-accounts call up to three times, and treats a
-// transport error or an unexpected status as an empty account, which gives
-// the 403. Lookups here leave retries to the AccountLookup and always give
-// the 500.
+// PHP retries a failed api-accounts call up to three times; a transport
+// error or an unexpected status that persists ends in the same 500 as here.
+// Lookups here leave retries to the AccountLookup.
 func Authenticate(lookup AccountLookup) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -160,13 +159,18 @@ func Authenticate(lookup AccountLookup) Middleware {
 // read:default" (with a space) has no read scope. A request without the
 // scope gets 403 "Forbidden: Incorrect access scopes".
 //
+// The method is compared in upper case, so "get" needs "read:default" as
+// GET does, should one get past Routes, which rejects it as nginx does. PHP
+// compares the method as sent, which would let a lowercase "get" through
+// without the read scope if nginx didn't stop it first.
+//
 // It reads the scopes Authenticate stored, so it must run inside it; without
 // them, every method that needs a scope is refused.
 func RequireScopeByMethod() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var need string
-			switch r.Method {
+			switch phpMethod(r) {
 			case http.MethodGet:
 				need = ScopeRead
 			case http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete:

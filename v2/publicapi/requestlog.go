@@ -32,8 +32,11 @@ type Record struct {
 	// RequestLog was given WithFullAPIKey.
 	APIKey string
 	// AccountID is the authenticated account's id, or else the
-	// X-Ometria-Account or Ometria-Account-Id header. Like PHP, it is a JSON
-	// number when Authenticate succeeded and a string otherwise.
+	// Ometria-Account-Id header the gateway sets, or else the client's
+	// X-Ometria-Account header. Like PHP, it is a JSON number when
+	// Authenticate succeeded and a string otherwise. PHP prefers
+	// X-Ometria-Account; the gateway's header is preferred here so a client
+	// can't choose the account its failed requests are logged against.
 	AccountID string
 	// Authenticated reports whether AccountID came from Authenticate.
 	Authenticated bool
@@ -46,8 +49,10 @@ type Record struct {
 	// Content-Type, such as "json" or "form", or "" (null) if it has none.
 	RequestContentType string
 	// RequestBody is at most the first WithMaxBodyBytes bytes of the body.
-	RequestBody          string
-	ResponseHTTPCode     int
+	RequestBody      string
+	ResponseHTTPCode int
+	// ResponseContentType is the Content-Type the client got: the header when
+	// the response started, or else the type net/http sniffed from the body.
 	ResponseContentType  string
 	ResponseSize         int64
 	RequestHostname      string
@@ -58,8 +63,10 @@ type Record struct {
 func (r Record) MarshalJSON() ([]byte, error) {
 	accountID, _ := json.Marshal(r.AccountID)
 	if r.Authenticated {
-		if _, err := strconv.Atoi(r.AccountID); err == nil {
-			accountID = []byte(r.AccountID)
+		// Write the parsed integer, not the raw string: "+7" and "007" parse
+		// but aren't JSON numbers.
+		if n, err := strconv.Atoi(r.AccountID); err == nil {
+			accountID = strconv.AppendInt(nil, int64(n), 10)
 		}
 	}
 	return json.Marshal(struct {
@@ -154,8 +161,10 @@ func WithFullAPIKey() RequestLogOption {
 }
 
 // WithRequestID sets how a request's id is found, such as api.RequestID.
-// The default is the X-Request-ID header, or a random UUID without one.
-// PHP generated a time-based UUID for every request.
+// The default is the X-Request-ID header if it is at most 64 characters of
+// [A-Za-z0-9._-], and a random UUID otherwise, so a client can't put
+// arbitrary text in the log. PHP generated a time-based UUID for every
+// request.
 func WithRequestID(f func(*http.Request) string) RequestLogOption {
 	return func(c *requestLogConfig) { c.requestID = f }
 }
@@ -189,7 +198,7 @@ func logStateFrom(ctx context.Context) *logState {
 // RequestLog returns middleware that sends sink one Record per request, as
 // PHP's finish hook does, for requests with an API key (the X-Ometria-Auth
 // header, else Authorization) and an account id (the authenticated account,
-// else the X-Ometria-Account header, else Ometria-Account-Id). Put it
+// else the Ometria-Account-Id header, else X-Ometria-Account). Put it
 // outside Routes and Authenticate so it sees their errors.
 //
 // It reads up to WithMaxBodyBytes of the request body before calling next,
@@ -212,7 +221,7 @@ func RequestLog(sink Sink, opts ...RequestLogOption) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			apiKey := headerValue(r.Header, "X-Ometria-Auth", "Authorization")
-			if apiKey == "" || headerValue(r.Header, "X-Ometria-Account", HeaderAccountID) == "" {
+			if apiKey == "" || headerValue(r.Header, HeaderAccountID, "X-Ometria-Account") == "" {
 				// PHP returns early unless both are present; Authenticate
 				// can't supply an account without the account header.
 				next.ServeHTTP(w, r)
@@ -239,7 +248,7 @@ func RequestLog(sink Sink, opts ...RequestLogOption) Middleware {
 					RequestContentType:   phpContentFormat(r.Header.Get("Content-Type")),
 					RequestBody:          string(body),
 					ResponseHTTPCode:     rw.status,
-					ResponseContentType:  rw.Header().Get("Content-Type"),
+					ResponseContentType:  rw.contentType(),
 					ResponseSize:         rw.size,
 					RequestHostname:      r.Host,
 					ResponseErrorMessage: state.errorMessage,
@@ -248,7 +257,7 @@ func RequestLog(sink Sink, opts ...RequestLogOption) Middleware {
 					rec.APIKey = rec.APIKey[len(rec.APIKey)-4:]
 				}
 				if !rec.Authenticated {
-					rec.AccountID = headerValue(r.Header, "X-Ometria-Account", HeaderAccountID)
+					rec.AccountID = headerValue(r.Header, HeaderAccountID, "X-Ometria-Account")
 				}
 				if rec.ResponseHTTPCode == 0 {
 					rec.ResponseHTTPCode = http.StatusOK
@@ -297,10 +306,28 @@ type errReader struct{ err error }
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 func defaultRequestID(r *http.Request) string {
-	if id := r.Header.Get("X-Request-ID"); id != "" {
+	if id := r.Header.Get("X-Request-ID"); validRequestID(id) {
 		return id
 	}
 	return newUUID()
+}
+
+// maxRequestIDLen is the longest X-Request-ID defaultRequestID accepts.
+const maxRequestIDLen = 64
+
+// validRequestID reports whether id is 1 to maxRequestIDLen characters of
+// [A-Za-z0-9._-].
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // newUUID returns a random (version 4) UUID.
@@ -330,13 +357,20 @@ func remoteIP(r *http.Request) string {
 	return host
 }
 
-// responseWriter records the status and size of a response. Unwrap lets
-// http.ResponseController reach the optional interfaces of the writer it
-// wraps.
+// responseWriter records the status, size and Content-Type of a response.
+// Unwrap lets http.ResponseController reach the optional interfaces of the
+// writer it wraps.
 type responseWriter struct {
 	http.ResponseWriter
 	status int
 	size   int64
+
+	// The Content-Type the client got, as net/http decides it: the header
+	// when the response started, else sniffed from the start of the body.
+	typeKnown bool   // ctype is final.
+	ctype     string // The header's value, when typeKnown.
+	sniff     bool   // Content-Type comes from sniffing the body.
+	head      []byte // The start of the body, for sniffing.
 }
 
 // wrapWriter wraps w, or returns it if it's already wrapped.
@@ -349,14 +383,17 @@ func wrapWriter(w http.ResponseWriter) *responseWriter {
 
 func (w *responseWriter) WriteHeader(code int) {
 	if w.status == 0 && (code >= 200 || code == http.StatusSwitchingProtocols) {
-		w.status = code
+		w.start(code)
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
 
 func (w *responseWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
-		w.status = http.StatusOK
+		w.start(http.StatusOK)
+	}
+	if w.sniff && len(w.head) < sniffLen {
+		w.head = append(w.head, b[:min(len(b), sniffLen-len(w.head))]...)
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.size += int64(n)
@@ -365,10 +402,68 @@ func (w *responseWriter) Write(b []byte) (int, error) {
 
 func (w *responseWriter) Flush() {
 	if w.status == 0 {
-		w.status = http.StatusOK
+		w.start(http.StatusOK)
 	}
+	// net/http sniffs what it has when it first flushes, however little.
+	w.finishSniff()
 	//nolint:errcheck // Flushing is best effort, as with http.Flusher.
 	http.NewResponseController(w.ResponseWriter).Flush()
+}
+
+// sniffLen is how much of the body http.DetectContentType reads.
+const sniffLen = 512
+
+// start records that the response started with code, and takes the
+// Content-Type from the headers as they are now, which is when net/http
+// copies them. Without one, net/http sniffs the body, unless the header is
+// present but empty, or the response is chunked by the handler or has no
+// body.
+func (w *responseWriter) start(code int) {
+	w.status = code
+	h := w.Header()
+	if v, ok := h["Content-Type"]; ok {
+		w.typeKnown = true
+		if len(v) > 0 {
+			w.ctype = v[0]
+		}
+		return
+	}
+	if h.Get("Transfer-Encoding") != "" || !bodyAllowed(code) {
+		w.typeKnown = true
+		return
+	}
+	w.sniff = true
+}
+
+func (w *responseWriter) finishSniff() {
+	if w.sniff && !w.typeKnown {
+		w.typeKnown = true
+		if len(w.head) > 0 {
+			w.ctype = http.DetectContentType(w.head)
+		}
+	}
+}
+
+// contentType returns the response's Content-Type as the client got it.
+func (w *responseWriter) contentType() string {
+	if w.status == 0 {
+		// Nothing written: net/http sends the headers as they are now.
+		return w.Header().Get("Content-Type")
+	}
+	w.finishSniff()
+	return w.ctype
+}
+
+// bodyAllowed reports whether a response with status code may have a body,
+// as net/http's bodyAllowedForStatus does.
+func bodyAllowed(code int) bool {
+	switch {
+	case code >= 100 && code <= 199:
+		return false
+	case code == http.StatusNoContent, code == http.StatusNotModified:
+		return false
+	}
+	return true
 }
 
 func (w *responseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }

@@ -74,6 +74,9 @@ func serve(h http.Handler, method, target string, header map[string]string, body
 	return rec
 }
 
+// nginx400 is nginx's golden 400 page, CRLF line endings and all.
+const nginx400 = "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
 func legacyBody(code, msg string) string {
 	return `{"status":"ERROR","code":` + code + `,"message":"` + msg + `","timestamp":1792243297}`
 }
@@ -161,6 +164,18 @@ func TestResponses(t *testing.T) {
 			200, "text/html; charset=UTF-8", "GET", ""},
 		{"options on unknown path", "OPTIONS", "/v2/nope", nil,
 			404, "application/json", "", legacyBody("404", `No route found for \u0022OPTIONS \/v2\/nope\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
+
+		// nginx, in front of PHP, rejects methods that aren't all upper case.
+		{"lowercase get", "get", "/v2/push/_errors", auth("1", "read:default"),
+			400, "text/html", "", nginx400},
+		{"lowercase get without scope", "get", "/v2/push/_errors", auth("1", "write:default"),
+			400, "text/html", "", nginx400},
+		{"mixed case", "Get", "/v2/push/_errors", nil,
+			400, "text/html", "", nginx400},
+		{"odd case", "gEt", "/v2/nope", nil,
+			400, "text/html", "", nginx400},
+		{"lowercase options", "options", "/v2/push/_errors", nil,
+			400, "text/html", "", nginx400},
 
 		// Handler errors.
 		{"apiResponseError", "POST", "/v2/push/_errors/fail?x=a/b", auth("1", "write:default"),
@@ -314,7 +329,12 @@ func TestRequireScopeByMethod(t *testing.T) {
 		{"DELETE", []string{"write:default"}, true},
 		{"HEAD", nil, true},
 		{"OPTIONS", nil, true},
-		{"get", nil, true}, // PHP compares REQUEST_METHOD as sent.
+		// PHP compares REQUEST_METHOD as sent, so "get" would need no scope
+		// there were nginx not in front; here it needs the same as GET.
+		{"get", nil, false},
+		{"get", []string{"read:default"}, true},
+		{"post", []string{"read:default"}, false},
+		{"Delete", []string{"write:default"}, true},
 	}
 	h := testEncoder(RequireScopeByMethod()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
 	for _, tt := range tests {
@@ -346,5 +366,52 @@ func TestChainOrder(t *testing.T) {
 	Chain(mw("a"), mw("b"), mw("c"))(http.NotFoundHandler()).ServeHTTP(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil))
 	if strings.Join(order, "") != "abc" {
 		t.Errorf("order = %v", order)
+	}
+}
+
+func TestErrorAfterPartialWrite(t *testing.T) {
+	logs := &strings.Builder{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	defer slog.SetDefault(prev)
+
+	for _, tt := range []struct {
+		name  string
+		write func(http.ResponseWriter)
+		body  string
+	}{
+		{"headers", func(w http.ResponseWriter) { w.WriteHeader(http.StatusAccepted) }, ""},
+		{"body", func(w http.ResponseWriter) { w.Write([]byte(`{"partial":`)) }, `{"partial":`}, //nolint:errcheck
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logs.Reset()
+			sink := &MemorySink{}
+			h := Chain(testEncoder, RequestLog(sink), Recover(nil))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tt.write(w)
+				Error(w, r, http.StatusBadRequest, "too late")
+			}))
+			rec := serve(h, "GET", "/", map[string]string{"X-Ometria-Auth": "k", HeaderAccountID: "1"}, "")
+			want := http.StatusAccepted
+			if tt.body != "" {
+				want = http.StatusOK
+			}
+			if rec.Code != want || rec.Body.String() != tt.body {
+				t.Errorf("response = %d %q, want %d %q", rec.Code, rec.Body.String(), want, tt.body)
+			}
+			if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "too late") {
+				t.Errorf("expected an error log, got %q", logs.String())
+			}
+			if recs := sink.Records(); len(recs) != 1 || recs[0].ResponseErrorMessage != "" || recs[0].ResponseHTTPCode != want {
+				t.Errorf("records = %+v", recs)
+			}
+		})
+	}
+
+	// A plain ResponseWriter can't tell, so Error writes as before.
+	rec := httptest.NewRecorder()
+	rec.Write([]byte("x")) //nolint:errcheck
+	Error(rec, httptest.NewRequest("GET", "/", nil), http.StatusBadRequest, "msg")
+	if !strings.Contains(rec.Body.String(), `"message":"msg"`) {
+		t.Errorf("plain writer body = %q", rec.Body.String())
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -201,5 +202,117 @@ func TestResponseWriterUnwrap(t *testing.T) {
 	}
 	if !rec.Flushed || rw.status != 200 {
 		t.Errorf("flushed=%v status=%d", rec.Flushed, rw.status)
+	}
+}
+
+func TestRecordJSONAuthenticatedAccountIDIsValid(t *testing.T) {
+	for _, id := range []string{"7", "+7", "007", "-7", "+007", "0", "x7", ""} {
+		b, err := json.Marshal(Record{AccountID: id, Authenticated: true})
+		if err != nil {
+			t.Fatalf("%q: %v", id, err)
+		}
+		if !json.Valid(b) {
+			t.Errorf("%q: invalid JSON %s", id, b)
+		}
+	}
+	b, _ := json.Marshal(Record{AccountID: "+007", Authenticated: true})
+	if !strings.Contains(string(b), `"account_id":7,`) {
+		t.Errorf("expected account_id 7, got %s", b)
+	}
+}
+
+func TestRequestLogPrefersGatewayAccountHeader(t *testing.T) {
+	sink := &MemorySink{}
+	// No scopes header, so Authenticate fails and the account comes from a header.
+	serve(newTestHandler(sink), "GET", "/v2/push/_errors", map[string]string{
+		"X-Ometria-Auth": "k", "X-Ometria-Account": "9", HeaderAccountID: "1",
+	}, "")
+	if recs := sink.Records(); len(recs) != 1 || recs[0].AccountID != "1" || recs[0].Authenticated {
+		t.Errorf("records = %+v", recs)
+	}
+}
+
+func TestDefaultRequestID(t *testing.T) {
+	uuid := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	for _, tt := range []struct {
+		header string
+		keep   bool
+	}{
+		{"req-1", true},
+		{"A.b_C-9", true},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{"has space", false},
+		{`quote"`, false},
+		{"ünïcode", false},
+		{"", false},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		if tt.header != "" {
+			r.Header.Set("X-Request-ID", tt.header)
+		}
+		got := defaultRequestID(r)
+		if tt.keep && got != tt.header {
+			t.Errorf("%q: got %q, want it kept", tt.header, got)
+		}
+		if !tt.keep && !uuid.MatchString(got) {
+			t.Errorf("%q: got %q, want a UUID", tt.header, got)
+		}
+	}
+}
+
+func TestRequestLogResponseContentTypeMatchesClient(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		handler func(http.ResponseWriter)
+	}{
+		{"sniffed html", func(w http.ResponseWriter) { io.WriteString(w, "<html><body>hi</body></html>") }},         //nolint:errcheck
+		{"sniffed text", func(w http.ResponseWriter) { io.WriteString(w, `{"a":1}`) }},                              //nolint:errcheck
+		{"sniffed over writes", func(w http.ResponseWriter) { io.WriteString(w, "<ht"); io.WriteString(w, "ml>") }}, //nolint:errcheck
+		{"explicit", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{}`) //nolint:errcheck
+		}},
+		{"set after write", func(w http.ResponseWriter) {
+			io.WriteString(w, "<html>") //nolint:errcheck
+			w.Header().Set("Content-Type", "application/json")
+		}},
+		{"suppressed", func(w http.ResponseWriter) {
+			w.Header()["Content-Type"] = nil
+			io.WriteString(w, "<html>") //nolint:errcheck
+		}},
+		{"no body", func(w http.ResponseWriter) {}},
+		{"no content", func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }},
+		{"flushed before body", func(w http.ResponseWriter) {
+			w.(http.Flusher).Flush()
+			io.WriteString(w, "<html>") //nolint:errcheck
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &MemorySink{}
+			srv := httptest.NewServer(RequestLog(sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tt.handler(w)
+			})))
+			defer srv.Close()
+
+			req, _ := http.NewRequest("GET", srv.URL, nil)
+			req.Header.Set("X-Ometria-Auth", "k")
+			req.Header.Set(HeaderAccountID, "1")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck
+			resp.Body.Close()
+			srv.Close() // Waits for the handler, and so the record.
+
+			recs := sink.Records()
+			if len(recs) != 1 {
+				t.Fatalf("expected 1 record, got %d", len(recs))
+			}
+			if got, want := recs[0].ResponseContentType, resp.Header.Get("Content-Type"); got != want {
+				t.Errorf("response_content_type = %q, client got %q", got, want)
+			}
+		})
 	}
 }

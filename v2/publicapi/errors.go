@@ -52,10 +52,26 @@ func UseEncoder(enc Encoder) Middleware {
 
 // Error writes an error response with code and msg, using the encoder
 // installed with UseEncoder, or LegacyEncoder if there is none.
+//
+// If the response has already started (its headers or part of its body were
+// written), a second status and body would only corrupt it, so Error logs msg
+// at error level with slog.Default() and writes nothing. It can only tell
+// through the writer RequestLog and Recover wrap the response in, found
+// through Unwrap; on any other writer it writes as usual.
 func Error(w http.ResponseWriter, r *http.Request, code int, msg string, opts ...ErrorOption) {
 	e := ErrorInfo{Code: code, Message: msg}
 	for _, o := range opts {
 		o(&e)
+	}
+	if rw := findWriter(w); rw != nil && rw.status != 0 {
+		slog.ErrorContext(r.Context(), "publicapi: error after the response started",
+			slog.Int("status", rw.status),
+			slog.Int("code", code),
+			slog.String("message", msg),
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+		)
+		return
 	}
 	if s := logStateFrom(r.Context()); s != nil && !e.IncludeRequest {
 		// PHP's $_SERVER['API_LAST_ERROR_MESSAGE'].
@@ -188,4 +204,19 @@ func Recover(logger *slog.Logger) Middleware {
 // header Symfony honours on POSTs, which this package ignores.
 func phpMethod(r *http.Request) string {
 	return strings.ToUpper(r.Method)
+}
+
+// findWriter returns the package's responseWriter in w's Unwrap chain, or nil.
+func findWriter(w http.ResponseWriter) *responseWriter {
+	for w != nil {
+		if rw, ok := w.(*responseWriter); ok {
+			return rw
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return nil
+		}
+		w = u.Unwrap()
+	}
+	return nil
 }

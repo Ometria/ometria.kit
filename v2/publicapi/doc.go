@@ -51,6 +51,14 @@
 // PHP turns an account lookup failure into a fatal error ("APIError" is not
 // imported in BaseController), whose shutdown handler writes a 500 "Internal
 // server error" body. Authenticate writes the same response, but RequestLog
-// still emits a record for it, where PHP's finish hook never runs. Other
-// differences are noted where they apply.
+// still emits a record for it, where PHP's finish hook never runs.
+//
+// PHP sits behind nginx, which answers any method that isn't all upper case
+// ("get", "Get") with its own 400 page before PHP runs, so Routes does the
+// same (see BadMethod). PHP itself would route "get" as GET but check scopes
+// against the method as sent, skipping the read-scope check; that is never
+// reachable behind nginx, and RequireScopeByMethod deliberately compares the
+// method in upper case so it can't be reached here either.
+//
+// Other differences are noted where they apply.
 package publicapi
