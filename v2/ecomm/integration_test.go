@@ -303,16 +303,56 @@ func TestIntegrationPgBouncer(t *testing.T) {
 	})
 
 	t.Run("context deadline cancels a query", func(t *testing.T) {
-		qctx, qcancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		// Watch pg_stat_activity through another database's pool, which has
+		// its own PgBouncer server connection.
+		watch, err := utc.Pool(ctx, 2, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const marker = "ecomm-it-cancel"
+		sleeping := func() int {
+			t.Helper()
+			var n int
+			err := watch.QueryRow(ctx,
+				"SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '%' || $1 || '%' AND pid <> pg_backend_pid()",
+				marker+"*/").Scan(&n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+
+		qctx, qcancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer qcancel()
 		start := time.Now()
-		_, err := ro.Exec(qctx, "SELECT pg_sleep(10)")
-		if err == nil {
-			t.Fatal("pg_sleep(10) finished despite a 200ms deadline")
+		done := make(chan error, 1)
+		go func() {
+			_, err := ro.Exec(qctx, "SELECT pg_sleep(10) /* "+marker+"*/")
+			done <- err
+		}()
+		// The probe must see the query first, or the check below is vacuous.
+		seen := false
+		for !seen && time.Since(start) < 400*time.Millisecond {
+			seen = sleeping() > 0
+			time.Sleep(20 * time.Millisecond)
 		}
-		if d := time.Since(start); d > 5*time.Second {
+		if !seen {
+			t.Fatal("pg_sleep never showed up in pg_stat_activity")
+		}
+		if err := <-done; err == nil {
+			t.Fatal("pg_sleep(10) finished despite a 500ms deadline")
+		}
+		returned := time.Now()
+		if d := returned.Sub(start); d > 5*time.Second {
 			t.Errorf("query returned after %v", d)
 		}
+		for sleeping() > 0 {
+			if time.Since(returned) > time.Second {
+				t.Fatal("cancelled pg_sleep still active on the server 1s after the client gave up")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
 		var one int
 		if err := ro.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
 			t.Fatalf("pool unusable after a cancelled query: %v", err)
@@ -321,13 +361,24 @@ func TestIntegrationPgBouncer(t *testing.T) {
 
 	t.Run("stats", func(t *testing.T) {
 		stats := utc.Stats()
-		if len(stats) != 4 {
-			t.Fatalf("Stats() has %d pools, want 4", len(stats))
-		}
+		var names []string
 		for _, s := range stats {
-			if s.Stat.TotalConns() > DefaultMaxConns {
-				t.Errorf("%s: %d conns exceeds MaxConns", s.Database, s.Stat.TotalConns())
+			names = append(names, s.Database)
+			st := s.Stat
+			if st.MaxConns() != DefaultMaxConns {
+				t.Errorf("%s: MaxConns = %d, want %d", s.Database, st.MaxConns(), DefaultMaxConns)
 			}
+			// Every pool has run queries, and none is in use now.
+			if st.AcquireCount() == 0 || st.TotalConns() < 1 || st.TotalConns() > DefaultMaxConns {
+				t.Errorf("%s: AcquireCount=%d TotalConns=%d, want >0 and 1..%d", s.Database, st.AcquireCount(), st.TotalConns(), DefaultMaxConns)
+			}
+			if st.AcquiredConns() != 0 {
+				t.Errorf("%s: AcquiredConns = %d, want 0", s.Database, st.AcquiredConns())
+			}
+		}
+		want := "ometria_ecomm ometria_ecomm_0001 ometria_ecomm_0001_ro ometria_ecomm_ro"
+		if got := strings.Join(names, " "); got != want {
+			t.Errorf("Stats() databases = %q, want %q", got, want)
 		}
 	})
 }
