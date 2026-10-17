@@ -93,7 +93,7 @@ func TestRequestLog(t *testing.T) {
 				RequestID: "req-1", Timestamp: logTime, APIKey: "WXYZ", AccountID: "9",
 				Path: "/v2/nope", IPAddress: "192.0.2.1", RequestHTTPMethod: "GET",
 				RequestHostname: "example.com", ResponseHTTPCode: 404, ResponseContentType: "application/json",
-				ResponseSize:         int64(len(legacyBody("404", `No route found for "GET \/v2\/nope\/" (See http:\/\/docs.ometria.com\/ for support)`))),
+				ResponseSize:         int64(len(legacyBody("404", `No route found for \u0022GET \/v2\/nope\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`))),
 				ResponseErrorMessage: `No route found for "GET /v2/nope/" (See http://docs.ometria.com/ for support)`,
 			},
 		},

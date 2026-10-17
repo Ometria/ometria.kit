@@ -75,7 +75,7 @@ func Error(w http.ResponseWriter, r *http.Request, code int, msg string, opts ..
 //
 // with Content-Type application/json. The bytes match PHP's: messages are
 // escaped as Symfony's JsonResponse does (json_encode with JSON_HEX_TAG,
-// JSON_HEX_APOS, JSON_HEX_QUOT and JSON_HEX_AMP, so `"` is " and "/" is
+// JSON_HEX_APOS, JSON_HEX_QUOT and JSON_HEX_AMP, so `"` is \u0022 and "/" is
 // \/), or as plain json_encode for WithRequest errors, which append
 //
 //	"request":{"method":"GET","url":"/v2/push/_errors/?x=1/"}
