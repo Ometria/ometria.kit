@@ -3,6 +3,7 @@ package ecomm
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -128,20 +129,43 @@ func (c Config) withDefaults() Config {
 
 // poolConfig builds the pgxpool config for one database. c must already
 // have defaults applied.
+//
+// pgconn merges PG* environment variables and files under $HOME (~/.pgpass,
+// ~/.postgresql/*) below the connection string, so the string spells out
+// every setting those could supply. The result does not depend on the
+// process environment, except that PGSERVICE is refused: pgconn reads the
+// named service whenever it is set, and fails if the service is missing.
 func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error) {
+	if svc := os.Getenv("PGSERVICE"); svc != "" {
+		return nil, fmt.Errorf("ecomm: pool config for %s: PGSERVICE=%q is set; unset it, ecomm configures connections explicitly", dbName, svc)
+	}
 	host, port := c.Host, c.Port
 	if readOnly {
 		host, port = c.ReadOnlyHost, c.ReadOnlyPort
 	}
-	// The keyword/value form lets pgconn build the TLS config for sslmode.
-	// Explicit keys win over PG* environment variables.
+	// pgconn wants whole seconds; ConnectTimeout is applied exactly below.
+	connectSecs := int64((c.ConnectTimeout + time.Second - 1) / time.Second)
 	dsn := strings.Join([]string{
 		kv("host", host),
 		kv("port", fmt.Sprint(port)),
 		kv("dbname", dbName),
 		kv("user", c.User),
 		kv("password", c.Password),
+		kv("passfile", ""),
+		kv("servicefile", ""),
+		kv("connect_timeout", fmt.Sprint(connectSecs)),
 		kv("sslmode", c.SSLMode),
+		kv("sslnegotiation", "postgres"),
+		kv("sslrootcert", ""),
+		kv("sslcert", ""),
+		kv("sslkey", ""),
+		kv("sslpassword", ""),
+		kv("sslsni", "1"),
+		kv("target_session_attrs", "any"),
+		kv("min_protocol_version", "3.0"),
+		kv("max_protocol_version", "3.0"),
+		kv("channel_binding", "prefer"),
+		kv("require_auth", ""),
 	}, " ")
 	pc, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -150,6 +174,9 @@ func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error
 
 	cc := pc.ConnConfig
 	cc.ConnectTimeout = c.ConnectTimeout
+	// target_session_attrs=any already leaves this nil; a read-write check
+	// would reject every replica.
+	cc.ValidateConnect = nil
 	// Replace, not merge: anything else (PGOPTIONS, PGAPPNAME, ...) could
 	// be a startup parameter PgBouncer rejects.
 	cc.RuntimeParams = map[string]string{

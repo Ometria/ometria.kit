@@ -33,8 +33,13 @@ func NewResolver(cfg Config, lookup ShardLookup) (*Resolver, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	cfg = cfg.withDefaults()
+	// Surface environment problems (PGSERVICE) now rather than on first use.
+	if _, err := cfg.poolConfig("ometria_ecomm", false); err != nil {
+		return nil, err
+	}
 	return &Resolver{
-		cfg:    cfg.withDefaults(),
+		cfg:    cfg,
 		lookup: lookup,
 		pools:  make(map[string]*pgxpool.Pool),
 	}, nil
