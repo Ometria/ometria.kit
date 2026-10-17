@@ -3,7 +3,7 @@ module github.com/Ometria/ometria.kit/v2/publicapi/firehose
 go 1.25.0
 
 require (
-	github.com/Ometria/ometria.kit/v2 v2.0.0-alpha.1
+	github.com/Ometria/ometria.kit/v2 v2.0.0-alpha.2
 	github.com/aws/aws-sdk-go-v2 v1.47.3
 	github.com/aws/aws-sdk-go-v2/service/firehose v1.52.4
 )
