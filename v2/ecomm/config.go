@@ -191,7 +191,7 @@ func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error
 	if c.ApplicationName != "" {
 		cc.RuntimeParams["application_name"] = c.ApplicationName
 	}
-	// Transaction pooling: no named or cached server-side statements.
+	// Simple protocol, like PHP's emulated prepares; see the package doc.
 	cc.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	cc.StatementCacheCapacity = 0
 	cc.DescriptionCacheCapacity = 0

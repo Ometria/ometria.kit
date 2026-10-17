@@ -222,6 +222,26 @@ func TestIntegrationPgBouncer(t *testing.T) {
 		}
 	})
 
+	t.Run("SendBatch runs as one implicit transaction", func(t *testing.T) {
+		b := &pgx.Batch{}
+		b.Queue("SELECT txid_current()")
+		b.Queue("SELECT txid_current()")
+		br := ro.SendBatch(ctx, b)
+		var x1, x2 int64
+		if err := br.QueryRow().Scan(&x1); err != nil {
+			t.Fatal(err)
+		}
+		if err := br.QueryRow().Scan(&x2); err != nil {
+			t.Fatal(err)
+		}
+		if err := br.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if x1 != x2 {
+			t.Errorf("batch statements ran in transactions %d and %d, want one", x1, x2)
+		}
+	})
+
 	t.Run("PgBouncer keeps TimeZone per client on a shared server connection", func(t *testing.T) {
 		london := newResolver(t, "Europe/London", "ISO, DMY")
 		lp, err := london.Pool(ctx, 1, true)
