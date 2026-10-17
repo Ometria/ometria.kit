@@ -348,3 +348,50 @@ func TestChainOrder(t *testing.T) {
 		t.Errorf("order = %v", order)
 	}
 }
+
+func TestErrorAfterPartialWrite(t *testing.T) {
+	logs := &strings.Builder{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, nil)))
+	defer slog.SetDefault(prev)
+
+	for _, tt := range []struct {
+		name  string
+		write func(http.ResponseWriter)
+		body  string
+	}{
+		{"headers", func(w http.ResponseWriter) { w.WriteHeader(http.StatusAccepted) }, ""},
+		{"body", func(w http.ResponseWriter) { w.Write([]byte(`{"partial":`)) }, `{"partial":`}, //nolint:errcheck
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			logs.Reset()
+			sink := &MemorySink{}
+			h := Chain(testEncoder, RequestLog(sink), Recover(nil))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tt.write(w)
+				Error(w, r, http.StatusBadRequest, "too late")
+			}))
+			rec := serve(h, "GET", "/", map[string]string{"X-Ometria-Auth": "k", HeaderAccountID: "1"}, "")
+			want := http.StatusAccepted
+			if tt.body != "" {
+				want = http.StatusOK
+			}
+			if rec.Code != want || rec.Body.String() != tt.body {
+				t.Errorf("response = %d %q, want %d %q", rec.Code, rec.Body.String(), want, tt.body)
+			}
+			if !strings.Contains(logs.String(), "level=ERROR") || !strings.Contains(logs.String(), "too late") {
+				t.Errorf("expected an error log, got %q", logs.String())
+			}
+			if recs := sink.Records(); len(recs) != 1 || recs[0].ResponseErrorMessage != "" || recs[0].ResponseHTTPCode != want {
+				t.Errorf("records = %+v", recs)
+			}
+		})
+	}
+
+	// A plain ResponseWriter can't tell, so Error writes as before.
+	rec := httptest.NewRecorder()
+	rec.Write([]byte("x")) //nolint:errcheck
+	Error(rec, httptest.NewRequest("GET", "/", nil), http.StatusBadRequest, "msg")
+	if !strings.Contains(rec.Body.String(), `"message":"msg"`) {
+		t.Errorf("plain writer body = %q", rec.Body.String())
+	}
+}
