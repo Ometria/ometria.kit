@@ -53,10 +53,12 @@
 // server error" body. Authenticate writes the same response, but RequestLog
 // still emits a record for it, where PHP's finish hook never runs.
 //
-// PHP routes on the upper-cased method but checks access scopes against the
-// method as sent, so "get /v2/push/_errors" skips the read-scope check there.
-// Routes and RequireScopeByMethod deliberately upper-case the method for
-// both, so "get" is served and scope-checked exactly like GET.
+// PHP sits behind nginx, which answers any method that isn't all upper case
+// ("get", "Get") with its own 400 page before PHP runs, so Routes does the
+// same (see BadMethod). PHP itself would route "get" as GET but check scopes
+// against the method as sent, skipping the read-scope check; that is never
+// reachable behind nginx, and RequireScopeByMethod deliberately compares the
+// method in upper case so it can't be reached here either.
 //
 // Other differences are noted where they apply.
 package publicapi

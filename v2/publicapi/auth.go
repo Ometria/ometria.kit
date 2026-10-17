@@ -160,8 +160,9 @@ func Authenticate(lookup AccountLookup) Middleware {
 // scope gets 403 "Forbidden: Incorrect access scopes".
 //
 // The method is compared in upper case, so "get" needs "read:default" as
-// GET does. This deliberately differs from PHP, which compares the method as
-// sent and so lets a lowercase "get" through without the read scope.
+// GET does, should one get past Routes, which rejects it as nginx does. PHP
+// compares the method as sent, which would let a lowercase "get" through
+// without the read scope if nginx didn't stop it first.
 //
 // It reads the scopes Authenticate stored, so it must run inside it; without
 // them, every method that needs a scope is refused.

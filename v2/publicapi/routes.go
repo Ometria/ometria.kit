@@ -1,6 +1,7 @@
 package publicapi
 
 import (
+	"io"
 	"net/http"
 	"path"
 	"slices"
@@ -20,11 +21,9 @@ import (
 //     PHP answers for every route without authentication.
 //   - Routes for the path, but none for the method: MethodNotAllowed.
 //
-// The method is upper-cased before routing, as Symfony's getMethod does, so
-// "get" is served by GET routes and "options" answered like OPTIONS. Unlike
-// PHP, the handlers see the upper-cased method too: PHP's BaseController
-// checks scopes against REQUEST_METHOD as sent, so a "get" there skips the
-// read-scope check. That bypass is deliberately not reproduced here.
+// Before any of that, a method that isn't all upper-case letters ("get",
+// "Get") gets BadMethod's 400, without routing or authentication. PHP sits
+// behind nginx, which rejects such methods before PHP runs.
 //
 // In both of the last two, the methods are those of ServeMux's Allow header,
 // less the HEAD it adds for GET routes. ServeMux sorts them; PHP lists them
@@ -32,6 +31,11 @@ import (
 // methods may list them in a different order than PHP did.
 func Routes(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !upperMethod(r.Method) {
+			BadMethod(w, r)
+			return
+		}
+
 		p := r.URL.Path
 		if len(p) > 1 && strings.HasSuffix(p, "/") {
 			p = p[:len(p)-1]
@@ -44,13 +48,6 @@ func Routes(mux *http.ServeMux) http.Handler {
 		routed := r
 		if p != r.URL.Path {
 			routed = withPath(r, p)
-		}
-		if m := phpMethod(r); m != r.Method {
-			if routed == r {
-				c := *r
-				routed = &c
-			}
-			routed.Method = m
 		}
 		h, pattern := mux.Handler(routed)
 		if pattern != "" {
@@ -66,12 +63,36 @@ func Routes(mux *http.ServeMux) http.Handler {
 			return
 		}
 		methods := routeMethods(probe.header.Get("Allow"))
-		if routed.Method == http.MethodOptions {
+		if r.Method == http.MethodOptions {
 			Options(w, r, methods)
 			return
 		}
 		MethodNotAllowed(w, r, methods)
 	})
+}
+
+// nginxBadRequest is the body of nginx's own 400 response.
+const nginxBadRequest = "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n" +
+	"<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
+// BadMethod writes the 400 nginx, in front of PHP, answers a request whose
+// method isn't all upper-case letters with: Content-Type text/html and
+// nginx's own "400 Bad Request" page. It doesn't go through Error, as nginx's
+// response doesn't depend on PHP's error bodies.
+func BadMethod(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html")
+	w.WriteHeader(http.StatusBadRequest)
+	io.WriteString(w, nginxBadRequest) //nolint:errcheck
+}
+
+// upperMethod reports whether m is made of upper-case ASCII letters only.
+func upperMethod(m string) bool {
+	for i := 0; i < len(m); i++ {
+		if m[i] < 'A' || m[i] > 'Z' {
+			return false
+		}
+	}
+	return true
 }
 
 // NotFound writes PHP's 404 for a path with no route, through Error:

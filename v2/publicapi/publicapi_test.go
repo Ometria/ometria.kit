@@ -74,6 +74,9 @@ func serve(h http.Handler, method, target string, header map[string]string, body
 	return rec
 }
 
+// nginx400 is nginx's golden 400 page, CRLF line endings and all.
+const nginx400 = "<html>\r\n<head><title>400 Bad Request</title></head>\r\n<body>\r\n<center><h1>400 Bad Request</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+
 func legacyBody(code, msg string) string {
 	return `{"status":"ERROR","code":` + code + `,"message":"` + msg + `","timestamp":1792243297}`
 }
@@ -162,17 +165,17 @@ func TestResponses(t *testing.T) {
 		{"options on unknown path", "OPTIONS", "/v2/nope", nil,
 			404, "application/json", "", legacyBody("404", `No route found for \u0022OPTIONS \/v2\/nope\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 
-		// Lowercase methods are routed and scope-checked as upper case.
+		// nginx, in front of PHP, rejects methods that aren't all upper case.
 		{"lowercase get", "get", "/v2/push/_errors", auth("1", "read:default"),
-			200, "application/json", "", `{"account":1,"scopes":["read:default"]}` + "\n"},
-		{"lowercase get needs read", "get", "/v2/push/_errors", auth("1", "write:default"),
-			403, "application/json", "", legacyBody("403", "Forbidden: Incorrect access scopes")},
-		{"lowercase post needs write", "post", "/v2/push/_errors/fail", auth("1", "read:default"),
-			403, "application/json", "", legacyBody("403", "Forbidden: Incorrect access scopes")},
+			400, "text/html", "", nginx400},
+		{"lowercase get without scope", "get", "/v2/push/_errors", auth("1", "write:default"),
+			400, "text/html", "", nginx400},
+		{"mixed case", "Get", "/v2/push/_errors", nil,
+			400, "text/html", "", nginx400},
+		{"odd case", "gEt", "/v2/nope", nil,
+			400, "text/html", "", nginx400},
 		{"lowercase options", "options", "/v2/push/_errors", nil,
-			200, "text/html; charset=UTF-8", "GET", ""},
-		{"mixed case wrong method", "Put", "/v2/push/_errors", nil,
-			405, "application/json", "", legacyBody("405", `No route found for \u0022PUT \/v2\/push\/_errors\/\u0022: Method Not Allowed (Allow: GET, OPTIONS)`)},
+			400, "text/html", "", nginx400},
 
 		// Handler errors.
 		{"apiResponseError", "POST", "/v2/push/_errors/fail?x=a/b", auth("1", "write:default"),
@@ -326,8 +329,8 @@ func TestRequireScopeByMethod(t *testing.T) {
 		{"DELETE", []string{"write:default"}, true},
 		{"HEAD", nil, true},
 		{"OPTIONS", nil, true},
-		// PHP compares REQUEST_METHOD as sent, so "get" needs no scope there;
-		// here it needs the same as GET.
+		// PHP compares REQUEST_METHOD as sent, so "get" would need no scope
+		// there were nginx not in front; here it needs the same as GET.
 		{"get", nil, false},
 		{"get", []string{"read:default"}, true},
 		{"post", []string{"read:default"}, false},
