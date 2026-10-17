@@ -33,13 +33,15 @@ const (
 
 // pgbouncerINI mirrors helm/ew1-prod/values-readonly.yaml.gotmpl, except
 // default_pool_size = 1 so every client shares one server connection, which
-// is the worst case for leaked session state.
+// is the worst case for leaked session state. Each "_ro" alias points at its
+// own backend database, standing in for the replica, so the routing test can
+// tell a read-only pool from a read-write one.
 const pgbouncerINI = `
 [databases]
 ometria_ecomm = host=pg port=5432 dbname=ometria_ecomm_0000
-ometria_ecomm_ro = host=pg port=5432 dbname=ometria_ecomm_0000
+ometria_ecomm_ro = host=pg port=5432 dbname=ometria_ecomm_replica
 ometria_ecomm_0001 = host=pg port=5432 dbname=ometria_ecomm_0001
-ometria_ecomm_0001_ro = host=pg port=5432 dbname=ometria_ecomm_0001
+ometria_ecomm_0001_ro = host=pg port=5432 dbname=ometria_ecomm_0001_replica
 
 [pgbouncer]
 listen_addr = *
@@ -60,6 +62,8 @@ max_client_conn = 100
 const initSQL = `
 CREATE DATABASE ometria_ecomm_0000;
 CREATE DATABASE ometria_ecomm_0001;
+CREATE DATABASE ometria_ecomm_replica;
+CREATE DATABASE ometria_ecomm_0001_replica;
 `
 
 func TestIntegrationPgBouncer(t *testing.T) {
@@ -97,9 +101,9 @@ func TestIntegrationPgBouncer(t *testing.T) {
 			readOnly bool
 			want     string
 		}{
-			{1, true, "ometria_ecomm_0001"},
+			{1, true, "ometria_ecomm_0001_replica"},
 			{1, false, "ometria_ecomm_0001"},
-			{2, true, "ometria_ecomm_0000"},
+			{2, true, "ometria_ecomm_replica"},
 			{2, false, "ometria_ecomm_0000"},
 		} {
 			p, err := utc.Pool(ctx, tc.account, tc.readOnly)
