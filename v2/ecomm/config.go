@@ -3,6 +3,7 @@ package ecomm
 import (
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -46,7 +47,8 @@ type Config struct {
 
 	// TimeZone and DateStyle are sent as startup parameters on every
 	// connection. Required; use DefaultTimeZone and DefaultDateStyle to
-	// match PHP.
+	// match PHP. DateStyle must start with ISO (e.g. "ISO, DMY"), the only
+	// output style pgx can parse into time.Time under the simple protocol.
 	TimeZone  string
 	DateStyle string
 	// ApplicationName is sent as application_name when set.
@@ -88,6 +90,10 @@ func (c Config) validate() error {
 	}
 	if c.DateStyle == "" {
 		errs = append(errs, errors.New("DateStyle is required"))
+	} else if !isISODateStyle(c.DateStyle) {
+		// Under the simple protocol pgx parses timestamps from text, and it
+		// only understands the ISO output style.
+		errs = append(errs, fmt.Errorf("DateStyle %q must start with ISO", c.DateStyle))
 	}
 	if c.MaxConns < 0 || c.MinConns < 0 {
 		errs = append(errs, errors.New("MaxConns and MinConns must not be negative"))
@@ -128,20 +134,43 @@ func (c Config) withDefaults() Config {
 
 // poolConfig builds the pgxpool config for one database. c must already
 // have defaults applied.
+//
+// pgconn merges PG* environment variables and files under $HOME (~/.pgpass,
+// ~/.postgresql/*) below the connection string, so the string spells out
+// every setting those could supply. The result does not depend on the
+// process environment, except that PGSERVICE is refused: pgconn reads the
+// named service whenever it is set, and fails if the service is missing.
 func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error) {
+	if svc := os.Getenv("PGSERVICE"); svc != "" {
+		return nil, fmt.Errorf("ecomm: pool config for %s: PGSERVICE=%q is set; unset it, ecomm configures connections explicitly", dbName, svc)
+	}
 	host, port := c.Host, c.Port
 	if readOnly {
 		host, port = c.ReadOnlyHost, c.ReadOnlyPort
 	}
-	// The keyword/value form lets pgconn build the TLS config for sslmode.
-	// Explicit keys win over PG* environment variables.
+	// pgconn wants whole seconds; ConnectTimeout is applied exactly below.
+	connectSecs := int64((c.ConnectTimeout + time.Second - 1) / time.Second)
 	dsn := strings.Join([]string{
 		kv("host", host),
 		kv("port", fmt.Sprint(port)),
 		kv("dbname", dbName),
 		kv("user", c.User),
 		kv("password", c.Password),
+		kv("passfile", ""),
+		kv("servicefile", ""),
+		kv("connect_timeout", fmt.Sprint(connectSecs)),
 		kv("sslmode", c.SSLMode),
+		kv("sslnegotiation", "postgres"),
+		kv("sslrootcert", ""),
+		kv("sslcert", ""),
+		kv("sslkey", ""),
+		kv("sslpassword", ""),
+		kv("sslsni", "1"),
+		kv("target_session_attrs", "any"),
+		kv("min_protocol_version", "3.0"),
+		kv("max_protocol_version", "3.0"),
+		kv("channel_binding", "prefer"),
+		kv("require_auth", ""),
 	}, " ")
 	pc, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
@@ -150,6 +179,9 @@ func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error
 
 	cc := pc.ConnConfig
 	cc.ConnectTimeout = c.ConnectTimeout
+	// target_session_attrs=any already leaves this nil; a read-write check
+	// would reject every replica.
+	cc.ValidateConnect = nil
 	// Replace, not merge: anything else (PGOPTIONS, PGAPPNAME, ...) could
 	// be a startup parameter PgBouncer rejects.
 	cc.RuntimeParams = map[string]string{
@@ -159,7 +191,7 @@ func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error
 	if c.ApplicationName != "" {
 		cc.RuntimeParams["application_name"] = c.ApplicationName
 	}
-	// Transaction pooling: no named or cached server-side statements.
+	// Simple protocol, like PHP's emulated prepares; see the package doc.
 	cc.DefaultQueryExecMode = pgx.QueryExecModeSimpleProtocol
 	cc.StatementCacheCapacity = 0
 	cc.DescriptionCacheCapacity = 0
@@ -171,6 +203,13 @@ func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error
 	pc.MaxConnLifetimeJitter = c.MaxConnLifetime / 10
 	pc.HealthCheckPeriod = c.HealthCheckPeriod
 	return pc, nil
+}
+
+// isISODateStyle reports whether a DateStyle's output format, its first
+// comma- or space-separated field, is ISO.
+func isISODateStyle(ds string) bool {
+	f := strings.FieldsFunc(ds, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
+	return len(f) > 0 && strings.EqualFold(f[0], "ISO")
 }
 
 // kv quotes a libpq keyword/value pair.

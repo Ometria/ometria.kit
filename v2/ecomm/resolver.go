@@ -33,8 +33,13 @@ func NewResolver(cfg Config, lookup ShardLookup) (*Resolver, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
+	cfg = cfg.withDefaults()
+	// Surface environment problems (PGSERVICE) now rather than on first use.
+	if _, err := cfg.poolConfig("ometria_ecomm", false); err != nil {
+		return nil, err
+	}
 	return &Resolver{
-		cfg:    cfg.withDefaults(),
+		cfg:    cfg,
 		lookup: lookup,
 		pools:  make(map[string]*pgxpool.Pool),
 	}, nil
@@ -56,8 +61,13 @@ func (r *Resolver) Pool(ctx context.Context, accountID int, readOnly bool) (*pgx
 
 // PoolForDatabase returns the pool for a database name as produced by
 // DatabaseName, creating it on first use. Names ending in "_ro" use the
-// read-only host.
+// read-only host. Any other name ("ometria_ecomm_0000", "postgres", ...) is
+// rejected.
 func (r *Resolver) PoolForDatabase(name string) (*pgxpool.Pool, error) {
+	readOnly, ok := parseDatabaseName(name)
+	if !ok {
+		return nil, fmt.Errorf("ecomm: %q is not an ecomm database name", name)
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.closed {
@@ -66,7 +76,7 @@ func (r *Resolver) PoolForDatabase(name string) (*pgxpool.Pool, error) {
 	if p, ok := r.pools[name]; ok {
 		return p, nil
 	}
-	pc, err := r.cfg.poolConfig(name, strings.HasSuffix(name, "_ro"))
+	pc, err := r.cfg.poolConfig(name, readOnly)
 	if err != nil {
 		return nil, err
 	}

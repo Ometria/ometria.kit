@@ -24,22 +24,30 @@ import (
 // the pinned startup parameters take effect rather than matching by luck.
 //
 // Images can be overridden with ECOMM_IT_POSTGRES_IMAGE and
-// ECOMM_IT_PGBOUNCER_IMAGE. The PgBouncer image must ship /usr/bin/pgbouncer.
+// ECOMM_IT_PGBOUNCER_IMAGE. The default PgBouncer image is pinned to the
+// tag for the release production runs (1.25.1), though edoburu rebuilds tags
+// and v1.25.1-p0 currently ships the 1.25.2 binary; the test logs the version
+// it got. Any image with pgbouncer on its PATH works.
 
 const (
 	itUser     = "ometria"
 	itPassword = "Ometria123"
+
+	defaultPostgresImage  = "postgres:14"
+	defaultPgBouncerImage = "edoburu/pgbouncer:v1.25.1-p0"
 )
 
 // pgbouncerINI mirrors helm/ew1-prod/values-readonly.yaml.gotmpl, except
 // default_pool_size = 1 so every client shares one server connection, which
-// is the worst case for leaked session state.
+// is the worst case for leaked session state. Each "_ro" alias points at its
+// own backend database, standing in for the replica, so the routing test can
+// tell a read-only pool from a read-write one.
 const pgbouncerINI = `
 [databases]
 ometria_ecomm = host=pg port=5432 dbname=ometria_ecomm_0000
-ometria_ecomm_ro = host=pg port=5432 dbname=ometria_ecomm_0000
+ometria_ecomm_ro = host=pg port=5432 dbname=ometria_ecomm_replica
 ometria_ecomm_0001 = host=pg port=5432 dbname=ometria_ecomm_0001
-ometria_ecomm_0001_ro = host=pg port=5432 dbname=ometria_ecomm_0001
+ometria_ecomm_0001_ro = host=pg port=5432 dbname=ometria_ecomm_0001_replica
 
 [pgbouncer]
 listen_addr = *
@@ -60,6 +68,8 @@ max_client_conn = 100
 const initSQL = `
 CREATE DATABASE ometria_ecomm_0000;
 CREATE DATABASE ometria_ecomm_0001;
+CREATE DATABASE ometria_ecomm_replica;
+CREATE DATABASE ometria_ecomm_0001_replica;
 `
 
 func TestIntegrationPgBouncer(t *testing.T) {
@@ -97,9 +107,9 @@ func TestIntegrationPgBouncer(t *testing.T) {
 			readOnly bool
 			want     string
 		}{
-			{1, true, "ometria_ecomm_0001"},
+			{1, true, "ometria_ecomm_0001_replica"},
 			{1, false, "ometria_ecomm_0001"},
-			{2, true, "ometria_ecomm_0000"},
+			{2, true, "ometria_ecomm_replica"},
 			{2, false, "ometria_ecomm_0000"},
 		} {
 			p, err := utc.Pool(ctx, tc.account, tc.readOnly)
@@ -212,13 +222,33 @@ func TestIntegrationPgBouncer(t *testing.T) {
 		}
 	})
 
+	t.Run("SendBatch runs as one implicit transaction", func(t *testing.T) {
+		b := &pgx.Batch{}
+		b.Queue("SELECT txid_current()")
+		b.Queue("SELECT txid_current()")
+		br := ro.SendBatch(ctx, b)
+		var x1, x2 int64
+		if err := br.QueryRow().Scan(&x1); err != nil {
+			t.Fatal(err)
+		}
+		if err := br.QueryRow().Scan(&x2); err != nil {
+			t.Fatal(err)
+		}
+		if err := br.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if x1 != x2 {
+			t.Errorf("batch statements ran in transactions %d and %d, want one", x1, x2)
+		}
+	})
+
 	t.Run("PgBouncer keeps TimeZone per client on a shared server connection", func(t *testing.T) {
-		london := newResolver(t, "Europe/London", "SQL, DMY")
+		london := newResolver(t, "Europe/London", "ISO, DMY")
 		lp, err := london.Pool(ctx, 1, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		const q = "SELECT '2026-10-17 12:00:00.12+00'::timestamptz::text"
+		const q = "SELECT '2026-10-17 12:00:00.12+00'::timestamptz::text || ' ' || current_setting('DateStyle')"
 		for i := range 3 {
 			var a, b string
 			if err := lp.QueryRow(ctx, q).Scan(&a); err != nil {
@@ -227,7 +257,7 @@ func TestIntegrationPgBouncer(t *testing.T) {
 			if err := ro.QueryRow(ctx, q).Scan(&b); err != nil {
 				t.Fatal(err)
 			}
-			if a != "17/10/2026 13:00:00.12 BST" || b != "2026-10-17 12:00:00.12+00" {
+			if a != "2026-10-17 13:00:00.12+01 ISO, DMY" || b != "2026-10-17 12:00:00.12+00 ISO, MDY" {
 				t.Errorf("round %d: london=%q utc=%q", i, a, b)
 			}
 		}
@@ -273,16 +303,56 @@ func TestIntegrationPgBouncer(t *testing.T) {
 	})
 
 	t.Run("context deadline cancels a query", func(t *testing.T) {
-		qctx, qcancel := context.WithTimeout(ctx, 200*time.Millisecond)
+		// Watch pg_stat_activity through another database's pool, which has
+		// its own PgBouncer server connection.
+		watch, err := utc.Pool(ctx, 2, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		const marker = "ecomm-it-cancel"
+		sleeping := func() int {
+			t.Helper()
+			var n int
+			err := watch.QueryRow(ctx,
+				"SELECT count(*) FROM pg_stat_activity WHERE state = 'active' AND query LIKE '%' || $1 || '%' AND pid <> pg_backend_pid()",
+				marker+"*/").Scan(&n)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return n
+		}
+
+		qctx, qcancel := context.WithTimeout(ctx, 500*time.Millisecond)
 		defer qcancel()
 		start := time.Now()
-		_, err := ro.Exec(qctx, "SELECT pg_sleep(10)")
-		if err == nil {
-			t.Fatal("pg_sleep(10) finished despite a 200ms deadline")
+		done := make(chan error, 1)
+		go func() {
+			_, err := ro.Exec(qctx, "SELECT pg_sleep(10) /* "+marker+"*/")
+			done <- err
+		}()
+		// The probe must see the query first, or the check below is vacuous.
+		seen := false
+		for !seen && time.Since(start) < 400*time.Millisecond {
+			seen = sleeping() > 0
+			time.Sleep(20 * time.Millisecond)
 		}
-		if d := time.Since(start); d > 5*time.Second {
+		if !seen {
+			t.Fatal("pg_sleep never showed up in pg_stat_activity")
+		}
+		if err := <-done; err == nil {
+			t.Fatal("pg_sleep(10) finished despite a 500ms deadline")
+		}
+		returned := time.Now()
+		if d := returned.Sub(start); d > 5*time.Second {
 			t.Errorf("query returned after %v", d)
 		}
+		for sleeping() > 0 {
+			if time.Since(returned) > time.Second {
+				t.Fatal("cancelled pg_sleep still active on the server 1s after the client gave up")
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
 		var one int
 		if err := ro.QueryRow(ctx, "SELECT 1").Scan(&one); err != nil {
 			t.Fatalf("pool unusable after a cancelled query: %v", err)
@@ -291,13 +361,24 @@ func TestIntegrationPgBouncer(t *testing.T) {
 
 	t.Run("stats", func(t *testing.T) {
 		stats := utc.Stats()
-		if len(stats) != 4 {
-			t.Fatalf("Stats() has %d pools, want 4", len(stats))
-		}
+		var names []string
 		for _, s := range stats {
-			if s.Stat.TotalConns() > DefaultMaxConns {
-				t.Errorf("%s: %d conns exceeds MaxConns", s.Database, s.Stat.TotalConns())
+			names = append(names, s.Database)
+			st := s.Stat
+			if st.MaxConns() != DefaultMaxConns {
+				t.Errorf("%s: MaxConns = %d, want %d", s.Database, st.MaxConns(), DefaultMaxConns)
 			}
+			// Every pool has run queries, and none is in use now.
+			if st.AcquireCount() == 0 || st.TotalConns() < 1 || st.TotalConns() > DefaultMaxConns {
+				t.Errorf("%s: AcquireCount=%d TotalConns=%d, want >0 and 1..%d", s.Database, st.AcquireCount(), st.TotalConns(), DefaultMaxConns)
+			}
+			if st.AcquiredConns() != 0 {
+				t.Errorf("%s: AcquiredConns = %d, want 0", s.Database, st.AcquiredConns())
+			}
+		}
+		want := "ometria_ecomm ometria_ecomm_0001 ometria_ecomm_0001_ro ometria_ecomm_ro"
+		if got := strings.Join(names, " "); got != want {
+			t.Errorf("Stats() databases = %q, want %q", got, want)
 		}
 	})
 }
@@ -313,8 +394,8 @@ func startStack(t *testing.T) (string, uint16) {
 	if out, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
 		t.Skipf("docker unavailable (%v: %s); skipping integration test", err, strings.TrimSpace(string(out)))
 	}
-	pgImage := envOr("ECOMM_IT_POSTGRES_IMAGE", "postgres:14")
-	bouncerImage := envOr("ECOMM_IT_PGBOUNCER_IMAGE", "edoburu/pgbouncer:latest")
+	pgImage := envOr("ECOMM_IT_POSTGRES_IMAGE", defaultPostgresImage)
+	bouncerImage := envOr("ECOMM_IT_PGBOUNCER_IMAGE", defaultPgBouncerImage)
 
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
@@ -346,8 +427,12 @@ func startStack(t *testing.T) (string, uint16) {
 	docker(t, "run", "-d", "--name", bouncerName, "--network", network,
 		"-p", "127.0.0.1::5432",
 		"-v", dir+":/etc/pgbouncer-it:ro",
-		"--entrypoint", "/usr/bin/pgbouncer",
+		"--entrypoint", "pgbouncer", // resolved on the image's PATH
 		bouncerImage, "/etc/pgbouncer-it/pgbouncer.ini")
+
+	if v, err := exec.Command("docker", "exec", bouncerName, "pgbouncer", "--version").CombinedOutput(); err == nil {
+		t.Logf("%s: %s", bouncerImage, strings.SplitN(strings.TrimSpace(string(v)), "\n", 2)[0])
+	}
 
 	out := docker(t, "port", bouncerName, "5432/tcp")
 	_, portStr, err := net.SplitHostPort(strings.TrimSpace(strings.Split(out, "\n")[0]))

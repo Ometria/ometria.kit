@@ -28,16 +28,33 @@
 //
 // # PgBouncer
 //
-// The databases sit behind PgBouncer in transaction-pool mode, so pools use
-// the simple query protocol and never create server-side prepared
-// statements, and every session parameter is sent as a startup parameter.
-// PgBouncer tracks TimeZone and DateStyle itself and re-applies the client's
-// values on whichever server connection it hands out, which is what makes
-// pinning them safe in transaction mode. Any other startup parameter, such as
+// The databases sit behind PgBouncer in transaction-pool mode, and every
+// session parameter is sent as a startup parameter. PgBouncer tracks
+// TimeZone and DateStyle itself and re-applies the client's values on
+// whichever server connection it hands out, which is what makes pinning them
+// safe in transaction mode. Any other startup parameter, such as
 // statement_timeout, is rejected by PgBouncer unless it is listed in
 // track_extra_parameters or ignore_startup_parameters; use context deadlines
 // for query timeouts instead. Callers must set one: the production ometria
 // role has statement_timeout=6h, so the server will not stop a slow query.
+//
+// # Simple protocol
+//
+// Pools use pgx's simple query protocol, with parameters interpolated on the
+// client and no statement or description caches. That is not forced by
+// PgBouncer, which has tracked prepared statements in transaction mode since
+// 1.21 (max_prepared_statements); it is chosen to match PHP, whose PDO
+// connections emulate prepares and read every value back as text, so a Go
+// port sends the same SQL and sees the same values. It costs:
+//
+//   - Results arrive in text format and pgx parses them on the client, which
+//     is slower than binary for wide or numeric-heavy rows.
+//   - Timestamps are parsed from DateStyle output, and pgx only understands
+//     the ISO style, so Config requires a DateStyle that starts with ISO.
+//   - SendBatch sends the whole batch as one multi-statement simple query,
+//     which Postgres runs as a single implicit transaction: a failing
+//     statement rolls back the earlier ones unless the batch has its own
+//     BEGIN/COMMIT.
 //
 // # Timestamps
 //
