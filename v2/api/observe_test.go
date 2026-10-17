@@ -6,8 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -311,6 +313,66 @@ func TestRoutePath(t *testing.T) {
 	for pattern, want := range cases {
 		if got := routePath(pattern); got != want {
 			t.Errorf("routePath(%q) = %q, want %q", pattern, got, want)
+		}
+	}
+}
+
+func TestObserveLogOnlyProblems(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /ok", func(w http.ResponseWriter, r *http.Request) {})
+	mux.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) { time.Sleep(30 * time.Millisecond) })
+	mux.HandleFunc("GET /fail", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	logs := &bytes.Buffer{}
+	reg := prometheus.NewRegistry()
+	h := &harness{logs: logs, reg: reg}
+	h.handler = Observe(Config{
+		Logger:          slog.New(slog.NewJSONHandler(logs, nil)),
+		Registerer:      reg,
+		LogOnlyProblems: true,
+		SlowRequest:     10 * time.Millisecond,
+	})(mux)
+
+	h.serve("GET", "/ok", nil)
+	h.serve("GET", "/nope", nil)
+	h.serve("GET", "/fail", nil)
+	h.serve("GET", "/slow", nil)
+
+	var got []string
+	for _, l := range h.lines(t) {
+		got = append(got, l.Path)
+	}
+	if want := []string{"/nope", "/fail", "/slow"}; !slices.Equal(got, want) {
+		t.Errorf("logged %v, want %v", got, want)
+	}
+	if n := h.count("GET", "/ok", "2XX"); n != 1 {
+		t.Errorf("expected the quiet success to be measured once, got %v", n)
+	}
+}
+
+func TestObserveRequestIDFromClient(t *testing.T) {
+	var id string
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /x", func(w http.ResponseWriter, r *http.Request) { id = RequestID(r.Context()) })
+	h := newHarness(t, mux)
+
+	tests := []struct {
+		header string
+		kept   bool
+	}{
+		{"abc-123_X.y", true},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{"has space", false},
+		{"inject\"quote", false},
+		{"ünïcode", false},
+	}
+	for _, tt := range tests {
+		h.serve("GET", "/x", http.Header{"X-Request-Id": {tt.header}})
+		if kept := id == tt.header; kept != tt.kept {
+			t.Errorf("X-Request-ID %q: kept = %v, want %v (got %q)", tt.header, kept, tt.kept, id)
+		}
+		if id == "" {
+			t.Errorf("X-Request-ID %q: empty request ID", tt.header)
 		}
 	}
 }

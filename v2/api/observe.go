@@ -32,6 +32,33 @@ type Config struct {
 	// QuietRoutes lists route patterns, as registered with http.ServeMux
 	// (e.g. "GET /healthz"), that are measured and traced but not logged.
 	QuietRoutes []string
+	// LogOnlyProblems logs only requests that failed (status 400 or above,
+	// panics included) or took longer than SlowRequest. Every request is
+	// still measured and traced, so successful ones remain visible in
+	// metrics and traces without a log line each.
+	LogOnlyProblems bool
+	// SlowRequest, with LogOnlyProblems, also logs successful requests that
+	// took longer than this. Zero logs no successful requests.
+	SlowRequest time.Duration
+}
+
+// maxRequestIDLen bounds a client-supplied X-Request-ID.
+const maxRequestIDLen = 64
+
+// validRequestID reports whether id can be used as given: 1 to
+// maxRequestIDLen characters of [A-Za-z0-9._-]. Anything else is replaced, so
+// clients can't put arbitrary text into logs and traces.
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 type ctxKey int
@@ -46,7 +73,8 @@ type requestState struct {
 }
 
 // RequestID returns the ID of the request being served: the X-Request-ID
-// header if the client sent one, otherwise a generated ID.
+// header if the client sent a well-formed one (up to 64 characters of
+// [A-Za-z0-9._-]), otherwise a generated ID.
 func RequestID(ctx context.Context) string {
 	if s, ok := ctx.Value(keyRequestState).(*requestState); ok {
 		return s.id
@@ -85,7 +113,7 @@ func Observe(cfg Config) func(http.Handler) http.Handler {
 		observed := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
 			state := &requestState{id: r.Header.Get("X-Request-ID")}
-			if state.id == "" {
+			if !validRequestID(state.id) {
 				state.id = rand.Text()
 			}
 			r = r.WithContext(context.WithValue(r.Context(), keyRequestState, state))
@@ -111,7 +139,9 @@ func Observe(cfg Config) func(http.Handler) http.Handler {
 				span.SetName(r.Method + " " + route)
 				span.SetAttributes(attribute.String("http.route", route))
 
-				if !slices.Contains(cfg.QuietRoutes, r.Pattern) {
+				elapsed := time.Since(start)
+				problem := state.status >= 400 || (cfg.SlowRequest > 0 && elapsed > cfg.SlowRequest)
+				if !slices.Contains(cfg.QuietRoutes, r.Pattern) && (!cfg.LogOnlyProblems || problem) {
 					logger.LogAttrs(r.Context(), slog.LevelInfo, "request",
 						slog.String("request_id", state.id),
 						slog.String("method", r.Method),
@@ -119,7 +149,7 @@ func Observe(cfg Config) func(http.Handler) http.Handler {
 						slog.String("route", route),
 						slog.Int("status", state.status),
 						slog.Int64("bytes", state.bytes),
-						slog.Duration("duration", time.Since(start)),
+						slog.Duration("duration", elapsed),
 					)
 				}
 
