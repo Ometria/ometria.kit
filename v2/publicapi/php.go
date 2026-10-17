@@ -104,7 +104,7 @@ func appendPHPString(b []byte, s string, hex bool) []byte {
 		i++
 		switch {
 		case c == '"' && hex:
-			b = append(b, `"`...)
+			b = append(b, `\u0022`...)
 		case c == '"':
 			b = append(b, `\"`...)
 		case c == '\\':
@@ -124,13 +124,13 @@ func appendPHPString(b []byte, s string, hex bool) []byte {
 		case c < 0x20:
 			b = appendUnicodeEscape(b, rune(c))
 		case hex && c == '<':
-			b = append(b, `<`...)
+			b = append(b, `\u003C`...)
 		case hex && c == '>':
-			b = append(b, `>`...)
+			b = append(b, `\u003E`...)
 		case hex && c == '&':
-			b = append(b, `&`...)
+			b = append(b, `\u0026`...)
 		case hex && c == '\'':
-			b = append(b, `'`...)
+			b = append(b, `\u0027`...)
 		default:
 			b = append(b, c)
 		}

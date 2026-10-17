@@ -142,25 +142,25 @@ func TestResponses(t *testing.T) {
 		{"trailing slash", "GET", "/v2/push/_errors/", auth("1", "read:default"),
 			200, "application/json", "", `{"account":1,"scopes":["read:default"]}` + "\n"},
 		{"two trailing slashes", "GET", "/v2/push/_errors//", auth("1", "read:default"),
-			404, "application/json", "", legacyBody("404", `No route found for "GET \/v2\/push\/_errors\/\/" (See http:\/\/docs.ometria.com\/ for support)`)},
+			404, "application/json", "", legacyBody("404", `No route found for \u0022GET \/v2\/push\/_errors\/\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 		{"unclean path", "GET", "//v2/push/_errors", auth("1", "read:default"),
-			404, "application/json", "", legacyBody("404", `No route found for "GET \/\/v2\/push\/_errors\/" (See http:\/\/docs.ometria.com\/ for support)`)},
+			404, "application/json", "", legacyBody("404", `No route found for \u0022GET \/\/v2\/push\/_errors\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 		{"unknown subpath", "GET", "/v2/push/_errors/foo", auth("1", "read:default"),
-			404, "application/json", "", legacyBody("404", `No route found for "GET \/v2\/push\/_errors\/foo\/" (See http:\/\/docs.ometria.com\/ for support)`)},
+			404, "application/json", "", legacyBody("404", `No route found for \u0022GET \/v2\/push\/_errors\/foo\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 		{"unknown subpath with query", "GET", "/v2/push/_errors/foo?a=1", nil,
-			404, "application/json", "", legacyBody("404", `No route found for "GET \/v2\/push\/_errors\/foo\/" (See http:\/\/docs.ometria.com\/ for support)`)},
+			404, "application/json", "", legacyBody("404", `No route found for \u0022GET \/v2\/push\/_errors\/foo\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 		{"unknown path with referer", "GET", "/nope", map[string]string{"Referer": "https://x.test/a"},
-			404, "application/json", "", legacyBody("404", `No route found for "GET \/nope\/" (from "https:\/\/x.test\/a") (See http:\/\/docs.ometria.com\/ for support)`)},
+			404, "application/json", "", legacyBody("404", `No route found for \u0022GET \/nope\/\u0022 (from \u0022https:\/\/x.test\/a\u0022) (See http:\/\/docs.ometria.com\/ for support)`)},
 		{"post on get route", "POST", "/v2/push/_errors", auth("1", "read:default"),
-			405, "application/json", "", legacyBody("405", `No route found for "POST \/v2\/push\/_errors\/": Method Not Allowed (Allow: GET, OPTIONS)`)},
+			405, "application/json", "", legacyBody("405", `No route found for \u0022POST \/v2\/push\/_errors\/\u0022: Method Not Allowed (Allow: GET, OPTIONS)`)},
 		{"delete on get route", "DELETE", "/v2/push/_errors", auth("1", "read:default"),
-			405, "application/json", "", legacyBody("405", `No route found for "DELETE \/v2\/push\/_errors\/": Method Not Allowed (Allow: GET, OPTIONS)`)},
+			405, "application/json", "", legacyBody("405", `No route found for \u0022DELETE \/v2\/push\/_errors\/\u0022: Method Not Allowed (Allow: GET, OPTIONS)`)},
 		{"wrong method without auth", "PUT", "/v2/push/_errors", nil,
-			405, "application/json", "", legacyBody("405", `No route found for "PUT \/v2\/push\/_errors\/": Method Not Allowed (Allow: GET, OPTIONS)`)},
+			405, "application/json", "", legacyBody("405", `No route found for \u0022PUT \/v2\/push\/_errors\/\u0022: Method Not Allowed (Allow: GET, OPTIONS)`)},
 		{"options", "OPTIONS", "/v2/push/_errors", nil,
 			200, "text/html; charset=UTF-8", "GET", ""},
 		{"options on unknown path", "OPTIONS", "/v2/nope", nil,
-			404, "application/json", "", legacyBody("404", `No route found for "OPTIONS \/v2\/nope\/" (See http:\/\/docs.ometria.com\/ for support)`)},
+			404, "application/json", "", legacyBody("404", `No route found for \u0022OPTIONS \/v2\/nope\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 
 		// Handler errors.
 		{"apiResponseError", "POST", "/v2/push/_errors/fail?x=a/b", auth("1", "write:default"),
@@ -238,9 +238,9 @@ func TestAppendPHPString(t *testing.T) {
 		in       string
 		hex, std string
 	}{
-		{`a"b`, `"a"b"`, `"a\"b"`},
+		{`a"b`, `"a\u0022b"`, `"a\"b"`},
 		{`a/b\c`, `"a\/b\\c"`, `"a\/b\\c"`},
-		{`<&'>`, `"<&'>"`, `"<&'>"`},
+		{`<&'>`, `"\u003C\u0026\u0027\u003E"`, `"<&'>"`},
 		{"\n\t\x01\x7f", `"\n\t\u0001` + "\x7f" + `"`, `"\n\t\u0001` + "\x7f" + `"`},
 		{"\u00e9\u20ac\U0001F600", `"\u00e9\u20ac\ud83d\ude00"`, `"\u00e9\u20ac\ud83d\ude00"`},
 		{"bad\xff", `"bad\ufffd"`, `"bad\ufffd"`},
@@ -248,6 +248,11 @@ func TestAppendPHPString(t *testing.T) {
 	for _, tt := range tests {
 		if got := string(appendPHPString(nil, tt.in, true)); got != tt.hex {
 			t.Errorf("hex %q: got %s, want %s", tt.in, got, tt.hex)
+		}
+		for _, hex := range []bool{true, false} {
+			if got := appendPHPString(nil, tt.in, hex); !json.Valid(got) {
+				t.Errorf("hex=%v %q: %s is not valid JSON", hex, tt.in, got)
+			}
 		}
 		if got := string(appendPHPString(nil, tt.in, false)); got != tt.std {
 			t.Errorf("std %q: got %s, want %s", tt.in, got, tt.std)
