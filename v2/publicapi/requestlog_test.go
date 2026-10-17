@@ -316,3 +316,30 @@ func TestRequestLogResponseContentTypeMatchesClient(t *testing.T) {
 		})
 	}
 }
+
+func TestRequestLogSkipsBadMethods(t *testing.T) {
+	sink := &MemorySink{}
+	h := RequestLog(sink)(Routes(http.NewServeMux()))
+	for _, m := range []string{"get", "Get", "pOST"} {
+		req := httptest.NewRequest(m, "/v2/push/_errors", nil)
+		req.Header.Set("X-Ometria-Auth", "key-abcd")
+		req.Header.Set(HeaderAccountID, "1")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("%s: status %d, want 400", m, rec.Code)
+		}
+	}
+	if got := sink.Records(); len(got) != 0 {
+		t.Fatalf("recorded %d requests with bad methods, want none: %+v", len(got), got)
+	}
+
+	// An upper-case method is still recorded.
+	req := httptest.NewRequest("GET", "/v2/nope", nil)
+	req.Header.Set("X-Ometria-Auth", "key-abcd")
+	req.Header.Set(HeaderAccountID, "1")
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if got := sink.Records(); len(got) != 1 {
+		t.Fatalf("recorded %d requests, want 1", len(got))
+	}
+}

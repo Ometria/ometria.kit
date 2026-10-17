@@ -204,6 +204,9 @@ func logStateFrom(ctx context.Context) *logState {
 // It reads up to WithMaxBodyBytes of the request body before calling next,
 // which still reads the whole body.
 //
+// Requests whose method isn't all upper case are not recorded: nginx rejects
+// them before PHP, so PHP never logged them either.
+//
 // Unlike PHP, it records requests that ended in a fatal error, such as a
 // failed account lookup. PHP's HEAD responses have no content when the hook
 // runs, so their response_size is 0 here too.
@@ -224,6 +227,12 @@ func RequestLog(sink Sink, opts ...RequestLogOption) Middleware {
 			if apiKey == "" || headerValue(r.Header, HeaderAccountID, "X-Ometria-Account") == "" {
 				// PHP returns early unless both are present; Authenticate
 				// can't supply an account without the account header.
+				next.ServeHTTP(w, r)
+				return
+			}
+			if !upperMethod(r.Method) {
+				// nginx rejects these in front of PHP, so PHP never logs
+				// them; Routes answers them with BadMethod.
 				next.ServeHTTP(w, r)
 				return
 			}
