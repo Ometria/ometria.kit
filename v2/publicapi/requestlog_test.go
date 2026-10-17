@@ -203,3 +203,19 @@ func TestResponseWriterUnwrap(t *testing.T) {
 		t.Errorf("flushed=%v status=%d", rec.Flushed, rw.status)
 	}
 }
+
+func TestRecordJSONAuthenticatedAccountIDIsValid(t *testing.T) {
+	for _, id := range []string{"7", "+7", "007", "-7", "+007", "0", "x7", ""} {
+		b, err := json.Marshal(Record{AccountID: id, Authenticated: true})
+		if err != nil {
+			t.Fatalf("%q: %v", id, err)
+		}
+		if !json.Valid(b) {
+			t.Errorf("%q: invalid JSON %s", id, b)
+		}
+	}
+	b, _ := json.Marshal(Record{AccountID: "+007", Authenticated: true})
+	if !strings.Contains(string(b), `"account_id":7,`) {
+		t.Errorf("expected account_id 7, got %s", b)
+	}
+}

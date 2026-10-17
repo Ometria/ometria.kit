@@ -58,8 +58,10 @@ type Record struct {
 func (r Record) MarshalJSON() ([]byte, error) {
 	accountID, _ := json.Marshal(r.AccountID)
 	if r.Authenticated {
-		if _, err := strconv.Atoi(r.AccountID); err == nil {
-			accountID = []byte(r.AccountID)
+		// Write the parsed integer, not the raw string: "+7" and "007" parse
+		// but aren't JSON numbers.
+		if n, err := strconv.Atoi(r.AccountID); err == nil {
+			accountID = strconv.AppendInt(nil, int64(n), 10)
 		}
 	}
 	return json.Marshal(struct {
