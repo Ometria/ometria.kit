@@ -260,3 +260,59 @@ func TestDefaultRequestID(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestLogResponseContentTypeMatchesClient(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		handler func(http.ResponseWriter)
+	}{
+		{"sniffed html", func(w http.ResponseWriter) { io.WriteString(w, "<html><body>hi</body></html>") }},         //nolint:errcheck
+		{"sniffed text", func(w http.ResponseWriter) { io.WriteString(w, `{"a":1}`) }},                              //nolint:errcheck
+		{"sniffed over writes", func(w http.ResponseWriter) { io.WriteString(w, "<ht"); io.WriteString(w, "ml>") }}, //nolint:errcheck
+		{"explicit", func(w http.ResponseWriter) {
+			w.Header().Set("Content-Type", "application/json")
+			io.WriteString(w, `{}`) //nolint:errcheck
+		}},
+		{"set after write", func(w http.ResponseWriter) {
+			io.WriteString(w, "<html>") //nolint:errcheck
+			w.Header().Set("Content-Type", "application/json")
+		}},
+		{"suppressed", func(w http.ResponseWriter) {
+			w.Header()["Content-Type"] = nil
+			io.WriteString(w, "<html>") //nolint:errcheck
+		}},
+		{"no body", func(w http.ResponseWriter) {}},
+		{"no content", func(w http.ResponseWriter) { w.WriteHeader(http.StatusNoContent) }},
+		{"flushed before body", func(w http.ResponseWriter) {
+			w.(http.Flusher).Flush()
+			io.WriteString(w, "<html>") //nolint:errcheck
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &MemorySink{}
+			srv := httptest.NewServer(RequestLog(sink)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tt.handler(w)
+			})))
+			defer srv.Close()
+
+			req, _ := http.NewRequest("GET", srv.URL, nil)
+			req.Header.Set("X-Ometria-Auth", "k")
+			req.Header.Set(HeaderAccountID, "1")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			io.Copy(io.Discard, resp.Body) //nolint:errcheck
+			resp.Body.Close()
+			srv.Close() // Waits for the handler, and so the record.
+
+			recs := sink.Records()
+			if len(recs) != 1 {
+				t.Fatalf("expected 1 record, got %d", len(recs))
+			}
+			if got, want := recs[0].ResponseContentType, resp.Header.Get("Content-Type"); got != want {
+				t.Errorf("response_content_type = %q, client got %q", got, want)
+			}
+		})
+	}
+}
