@@ -24,11 +24,17 @@ import (
 // the pinned startup parameters take effect rather than matching by luck.
 //
 // Images can be overridden with ECOMM_IT_POSTGRES_IMAGE and
-// ECOMM_IT_PGBOUNCER_IMAGE. The PgBouncer image must ship /usr/bin/pgbouncer.
+// ECOMM_IT_PGBOUNCER_IMAGE. The default PgBouncer image is pinned to the
+// tag for the release production runs (1.25.1), though edoburu rebuilds tags
+// and v1.25.1-p0 currently ships the 1.25.2 binary; the test logs the version
+// it got. Any image with pgbouncer on its PATH works.
 
 const (
 	itUser     = "ometria"
 	itPassword = "Ometria123"
+
+	defaultPostgresImage  = "postgres:14"
+	defaultPgBouncerImage = "edoburu/pgbouncer:v1.25.1-p0"
 )
 
 // pgbouncerINI mirrors helm/ew1-prod/values-readonly.yaml.gotmpl, except
@@ -317,8 +323,8 @@ func startStack(t *testing.T) (string, uint16) {
 	if out, err := exec.Command("docker", "info", "--format", "{{.ServerVersion}}").CombinedOutput(); err != nil {
 		t.Skipf("docker unavailable (%v: %s); skipping integration test", err, strings.TrimSpace(string(out)))
 	}
-	pgImage := envOr("ECOMM_IT_POSTGRES_IMAGE", "postgres:14")
-	bouncerImage := envOr("ECOMM_IT_PGBOUNCER_IMAGE", "edoburu/pgbouncer:latest")
+	pgImage := envOr("ECOMM_IT_POSTGRES_IMAGE", defaultPostgresImage)
+	bouncerImage := envOr("ECOMM_IT_PGBOUNCER_IMAGE", defaultPgBouncerImage)
 
 	b := make([]byte, 4)
 	_, _ = rand.Read(b)
@@ -350,8 +356,12 @@ func startStack(t *testing.T) (string, uint16) {
 	docker(t, "run", "-d", "--name", bouncerName, "--network", network,
 		"-p", "127.0.0.1::5432",
 		"-v", dir+":/etc/pgbouncer-it:ro",
-		"--entrypoint", "/usr/bin/pgbouncer",
+		"--entrypoint", "pgbouncer", // resolved on the image's PATH
 		bouncerImage, "/etc/pgbouncer-it/pgbouncer.ini")
+
+	if v, err := exec.Command("docker", "exec", bouncerName, "pgbouncer", "--version").CombinedOutput(); err == nil {
+		t.Logf("%s: %s", bouncerImage, strings.SplitN(strings.TrimSpace(string(v)), "\n", 2)[0])
+	}
 
 	out := docker(t, "port", bouncerName, "5432/tcp")
 	_, portStr, err := net.SplitHostPort(strings.TrimSpace(strings.Split(out, "\n")[0]))
