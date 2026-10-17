@@ -51,6 +51,25 @@ jobs:
       - name: Test
         run: go test -v -race ./...
 
+  test-v2-ecomm:
+    # Separate module so v2 consumers don't pull in pgx. The integration test
+    # uses the runner's Docker for Postgres 14 + PgBouncer.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: v2/ecomm
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Install Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: v2/ecomm/go.mod
+      - name: Vet
+        run: go vet ./...
+      - name: Test
+        run: go test -v -race ./...
+
   golangci:
     name: lint
     runs-on: ubuntu-latest

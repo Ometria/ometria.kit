@@ -22,6 +22,18 @@ srv := api.NewServer(":8080", api.Observe(api.Config{Logger: logger})(mux))
 srv.ListenAndServe()
 ```
 
+`github.com/Ometria/ometria.kit/v2/ecomm` is the tenant-database layer, a
+separate module so services without Postgres don't pull in pgx. It routes an
+account to its ecomm shard the way PHP's `database('ecomm', $account,
+$read_only)` does and hands out one lazily created `pgxpool.Pool` per shard
+database, configured for PgBouncer's transaction mode (simple protocol, pinned
+`TimeZone` and `DateStyle`). See [`v2/ecomm/doc.go`](v2/ecomm/doc.go).
+
+```go
+resolver, err := ecomm.NewResolver(cfg, accountsClient)
+pool, err := resolver.Pool(ctx, accountID, true) // ometria_ecomm_0001_ro
+```
+
 ## Packages (v1)
 
 ### package api
