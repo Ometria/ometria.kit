@@ -20,6 +20,12 @@ import (
 //     PHP answers for every route without authentication.
 //   - Routes for the path, but none for the method: MethodNotAllowed.
 //
+// The method is upper-cased before routing, as Symfony's getMethod does, so
+// "get" is served by GET routes and "options" answered like OPTIONS. Unlike
+// PHP, the handlers see the upper-cased method too: PHP's BaseController
+// checks scopes against REQUEST_METHOD as sent, so a "get" there skips the
+// read-scope check. That bypass is deliberately not reproduced here.
+//
 // In both of the last two, the methods are those of ServeMux's Allow header,
 // less the HEAD it adds for GET routes. ServeMux sorts them; PHP lists them
 // in the order the controller defines its routes, so a path with several
@@ -39,6 +45,13 @@ func Routes(mux *http.ServeMux) http.Handler {
 		if p != r.URL.Path {
 			routed = withPath(r, p)
 		}
+		if m := phpMethod(r); m != r.Method {
+			if routed == r {
+				c := *r
+				routed = &c
+			}
+			routed.Method = m
+		}
 		h, pattern := mux.Handler(routed)
 		if pattern != "" {
 			mux.ServeHTTP(w, routed)
@@ -53,7 +66,7 @@ func Routes(mux *http.ServeMux) http.Handler {
 			return
 		}
 		methods := routeMethods(probe.header.Get("Allow"))
-		if r.Method == http.MethodOptions {
+		if routed.Method == http.MethodOptions {
 			Options(w, r, methods)
 			return
 		}

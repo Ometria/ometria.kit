@@ -160,13 +160,17 @@ func Authenticate(lookup AccountLookup) Middleware {
 // read:default" (with a space) has no read scope. A request without the
 // scope gets 403 "Forbidden: Incorrect access scopes".
 //
+// The method is compared in upper case, so "get" needs "read:default" as
+// GET does. This deliberately differs from PHP, which compares the method as
+// sent and so lets a lowercase "get" through without the read scope.
+//
 // It reads the scopes Authenticate stored, so it must run inside it; without
 // them, every method that needs a scope is refused.
 func RequireScopeByMethod() Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			var need string
-			switch r.Method {
+			switch phpMethod(r) {
 			case http.MethodGet:
 				need = ScopeRead
 			case http.MethodPut, http.MethodPost, http.MethodPatch, http.MethodDelete:

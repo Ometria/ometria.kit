@@ -162,6 +162,18 @@ func TestResponses(t *testing.T) {
 		{"options on unknown path", "OPTIONS", "/v2/nope", nil,
 			404, "application/json", "", legacyBody("404", `No route found for \u0022OPTIONS \/v2\/nope\/\u0022 (See http:\/\/docs.ometria.com\/ for support)`)},
 
+		// Lowercase methods are routed and scope-checked as upper case.
+		{"lowercase get", "get", "/v2/push/_errors", auth("1", "read:default"),
+			200, "application/json", "", `{"account":1,"scopes":["read:default"]}` + "\n"},
+		{"lowercase get needs read", "get", "/v2/push/_errors", auth("1", "write:default"),
+			403, "application/json", "", legacyBody("403", "Forbidden: Incorrect access scopes")},
+		{"lowercase post needs write", "post", "/v2/push/_errors/fail", auth("1", "read:default"),
+			403, "application/json", "", legacyBody("403", "Forbidden: Incorrect access scopes")},
+		{"lowercase options", "options", "/v2/push/_errors", nil,
+			200, "text/html; charset=UTF-8", "GET", ""},
+		{"mixed case wrong method", "Put", "/v2/push/_errors", nil,
+			405, "application/json", "", legacyBody("405", `No route found for \u0022PUT \/v2\/push\/_errors\/\u0022: Method Not Allowed (Allow: GET, OPTIONS)`)},
+
 		// Handler errors.
 		{"apiResponseError", "POST", "/v2/push/_errors/fail?x=a/b", auth("1", "write:default"),
 			400, "application/json", "", `{"status":"ERROR","code":400,"message":"Could not decode payload","timestamp":1792243297,"request":{"method":"POST","url":"\/v2\/push\/_errors\/fail\/?x=a\/b\/"}}`},
@@ -314,7 +326,12 @@ func TestRequireScopeByMethod(t *testing.T) {
 		{"DELETE", []string{"write:default"}, true},
 		{"HEAD", nil, true},
 		{"OPTIONS", nil, true},
-		{"get", nil, true}, // PHP compares REQUEST_METHOD as sent.
+		// PHP compares REQUEST_METHOD as sent, so "get" needs no scope there;
+		// here it needs the same as GET.
+		{"get", nil, false},
+		{"get", []string{"read:default"}, true},
+		{"post", []string{"read:default"}, false},
+		{"Delete", []string{"write:default"}, true},
 	}
 	h := testEncoder(RequireScopeByMethod()(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {})))
 	for _, tt := range tests {
