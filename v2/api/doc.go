@@ -19,6 +19,11 @@
 //	srv := api.NewServer(":8080", handler)
 //	srv.ListenAndServe()
 //
+// Set Config.LogOnlyProblems to log only failed (4xx, 5xx) and, with
+// SlowRequest, slow requests: successful ones are already counted by the
+// metrics and recorded in traces, so a log line each adds volume, not
+// information. New services should set it.
+//
 // # Migrating from v1
 //
 //   - api.NewServer(addr, logger, a) and Endpoints() become an http.ServeMux
