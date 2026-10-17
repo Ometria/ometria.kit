@@ -110,10 +110,9 @@ func ScopesFromContext(ctx context.Context) []string {
 //     account that isn't active. PHP has this branch but never reaches it,
 //     because api-accounts doesn't return inactive accounts.
 //
-// PHP retries a failed api-accounts call up to three times, and treats a
-// transport error or an unexpected status as an empty account, which gives
-// the 403. Lookups here leave retries to the AccountLookup and always give
-// the 500.
+// PHP retries a failed api-accounts call up to three times; a transport
+// error or an unexpected status that persists ends in the same 500 as here.
+// Lookups here leave retries to the AccountLookup.
 func Authenticate(lookup AccountLookup) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
