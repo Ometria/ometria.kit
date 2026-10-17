@@ -1,0 +1,12 @@
+github.com/Ometria/ometria.kit/v2 v2.0.0-alpha.1 h1:SNqEhrvVlOYkBnsa2rNquRktUzDdQ6Zdw3LzJzSfdXk=
+github.com/Ometria/ometria.kit/v2 v2.0.0-alpha.1/go.mod h1:BmHXBKRyczimWKW3611bcX8jOVIFqnsfxQ4L6YNkKoo=
+github.com/aws/aws-sdk-go-v2 v1.47.3 h1:HRoT/MkNi3bjO5xF4dCzLzvVmkvRGHj3/cLINDnJejk=
+github.com/aws/aws-sdk-go-v2 v1.47.3/go.mod h1:xSl+OSI5ZUw6bSMupWc218zE5Pl+65MCCu3ySWFY99A=
+github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6 h1:CqL8NN3p4I0JTwwV5MEoatIl4Y2amZ2X9dRD+0hbRL0=
+github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.6/go.mod h1:exdJ32hMqXl0Wyo6NwqEC5yIhtua3+PDaKE8P29m4qE=
+github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.6 h1:FpBq24TG6WVSObTNhQOv7Q0088rounUUlwn3zlNItkM=
+github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.6/go.mod h1:ONzdPVYC95oBOu0VWNEsKEntcoemP3xVKjT+qWml1s4=
+github.com/aws/aws-sdk-go-v2/service/firehose v1.52.4 h1:x7MK/eFmp5oDwNyLImQtswUZfrHqEHFszXb1gyczIkU=
+github.com/aws/aws-sdk-go-v2/service/firehose v1.52.4/go.mod h1:s7UeaOIdimOKVe5kA6c1B95vmELpofmTXgPG8Z9y22g=
+github.com/aws/smithy-go v1.28.5 h1:OqbqKtzY9NUnr2yAe9+hiTdFb20tNaK/lI0PMOGXX9k=
+github.com/aws/smithy-go v1.28.5/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
