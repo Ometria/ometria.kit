@@ -74,13 +74,16 @@ func staticLookup(shards map[int]string) ShardLookup {
 func TestConfigValidation(t *testing.T) {
 	lookup := staticLookup(nil)
 	for name, mutate := range map[string]func(*Config){
-		"no host":      func(c *Config) { c.Host = "" },
-		"no port":      func(c *Config) { c.Port = 0 },
-		"no user":      func(c *Config) { c.User = "" },
-		"bad sslmode":  func(c *Config) { c.SSLMode = "" },
-		"no timezone":  func(c *Config) { c.TimeZone = "" },
-		"no datestyle": func(c *Config) { c.DateStyle = "" },
-		"min > max":    func(c *Config) { c.MaxConns, c.MinConns = 2, 3 },
+		"no host":       func(c *Config) { c.Host = "" },
+		"no port":       func(c *Config) { c.Port = 0 },
+		"no user":       func(c *Config) { c.User = "" },
+		"bad sslmode":   func(c *Config) { c.SSLMode = "" },
+		"no timezone":   func(c *Config) { c.TimeZone = "" },
+		"no datestyle":  func(c *Config) { c.DateStyle = "" },
+		"SQL datestyle": func(c *Config) { c.DateStyle = "SQL, DMY" },
+		"MDY, ISO":      func(c *Config) { c.DateStyle = "MDY, ISO" },
+		"ISOX":          func(c *Config) { c.DateStyle = "ISOX" },
+		"min > max":     func(c *Config) { c.MaxConns, c.MinConns = 2, 3 },
 	} {
 		cfg := testConfig()
 		mutate(&cfg)
@@ -90,6 +93,39 @@ func TestConfigValidation(t *testing.T) {
 	}
 	if _, err := NewResolver(testConfig(), nil); err == nil {
 		t.Error("nil lookup: NewResolver succeeded, want error")
+	}
+	for _, ds := range []string{"ISO", "ISO, MDY", "iso,dmy", "ISO, YMD"} {
+		cfg := testConfig()
+		cfg.DateStyle = ds
+		if _, err := NewResolver(cfg, lookup); err != nil {
+			t.Errorf("DateStyle %q: %v", ds, err)
+		}
+	}
+}
+
+func TestPoolForDatabaseNames(t *testing.T) {
+	r, err := NewResolver(testConfig(), staticLookup(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer r.Close()
+	for _, name := range []string{
+		"ometria_ecomm", "ometria_ecomm_ro", "ometria_ecomm_0001", "ometria_ecomm_0001_ro", "ometria_ecomm_a_b",
+	} {
+		if _, err := r.PoolForDatabase(name); err != nil {
+			t.Errorf("PoolForDatabase(%q): %v", name, err)
+		}
+	}
+	for _, name := range []string{
+		"", "postgres", "ometria_ecomm_", "ometria_ecomm__ro", "ometria_ecomm_0000", "ometria_ecomm_0000_ro",
+		"ometria_ecommx", "ometria_ecomm_00-01", "ometria_ecomm_0001 ", "xometria_ecomm", "ometria_ecomm_0001'",
+	} {
+		if _, err := r.PoolForDatabase(name); err == nil {
+			t.Errorf("PoolForDatabase(%q) succeeded, want error", name)
+		}
+	}
+	if n := len(r.Stats()); n != 5 {
+		t.Errorf("Stats() has %d pools, want 5", n)
 	}
 }
 

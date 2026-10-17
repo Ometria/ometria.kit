@@ -223,12 +223,12 @@ func TestIntegrationPgBouncer(t *testing.T) {
 	})
 
 	t.Run("PgBouncer keeps TimeZone per client on a shared server connection", func(t *testing.T) {
-		london := newResolver(t, "Europe/London", "SQL, DMY")
+		london := newResolver(t, "Europe/London", "ISO, DMY")
 		lp, err := london.Pool(ctx, 1, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		const q = "SELECT '2026-10-17 12:00:00.12+00'::timestamptz::text"
+		const q = "SELECT '2026-10-17 12:00:00.12+00'::timestamptz::text || ' ' || current_setting('DateStyle')"
 		for i := range 3 {
 			var a, b string
 			if err := lp.QueryRow(ctx, q).Scan(&a); err != nil {
@@ -237,7 +237,7 @@ func TestIntegrationPgBouncer(t *testing.T) {
 			if err := ro.QueryRow(ctx, q).Scan(&b); err != nil {
 				t.Fatal(err)
 			}
-			if a != "17/10/2026 13:00:00.12 BST" || b != "2026-10-17 12:00:00.12+00" {
+			if a != "2026-10-17 13:00:00.12+01 ISO, DMY" || b != "2026-10-17 12:00:00.12+00 ISO, MDY" {
 				t.Errorf("round %d: london=%q utc=%q", i, a, b)
 			}
 		}

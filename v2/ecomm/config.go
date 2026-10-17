@@ -47,7 +47,8 @@ type Config struct {
 
 	// TimeZone and DateStyle are sent as startup parameters on every
 	// connection. Required; use DefaultTimeZone and DefaultDateStyle to
-	// match PHP.
+	// match PHP. DateStyle must start with ISO (e.g. "ISO, DMY"), the only
+	// output style pgx can parse into time.Time under the simple protocol.
 	TimeZone  string
 	DateStyle string
 	// ApplicationName is sent as application_name when set.
@@ -89,6 +90,10 @@ func (c Config) validate() error {
 	}
 	if c.DateStyle == "" {
 		errs = append(errs, errors.New("DateStyle is required"))
+	} else if !isISODateStyle(c.DateStyle) {
+		// Under the simple protocol pgx parses timestamps from text, and it
+		// only understands the ISO output style.
+		errs = append(errs, fmt.Errorf("DateStyle %q must start with ISO", c.DateStyle))
 	}
 	if c.MaxConns < 0 || c.MinConns < 0 {
 		errs = append(errs, errors.New("MaxConns and MinConns must not be negative"))
@@ -198,6 +203,13 @@ func (c Config) poolConfig(dbName string, readOnly bool) (*pgxpool.Config, error
 	pc.MaxConnLifetimeJitter = c.MaxConnLifetime / 10
 	pc.HealthCheckPeriod = c.HealthCheckPeriod
 	return pc, nil
+}
+
+// isISODateStyle reports whether a DateStyle's output format, its first
+// comma- or space-separated field, is ISO.
+func isISODateStyle(ds string) bool {
+	f := strings.FieldsFunc(ds, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' })
+	return len(f) > 0 && strings.EqualFold(f[0], "ISO")
 }
 
 // kv quotes a libpq keyword/value pair.

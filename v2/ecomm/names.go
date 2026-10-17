@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // DefaultShard is the shard whose database has no numeric suffix.
@@ -59,4 +60,19 @@ func DatabaseName(shard string, readOnly bool) (string, error) {
 		name += "_ro"
 	}
 	return name, nil
+}
+
+// parseDatabaseName reports whether name is one DatabaseName can produce,
+// and whether it is a read-only name.
+func parseDatabaseName(name string) (readOnly bool, ok bool) {
+	base, readOnly := strings.CutSuffix(name, "_ro")
+	if base == "ometria_ecomm" {
+		return readOnly, true
+	}
+	shard, found := strings.CutPrefix(base, "ometria_ecomm_")
+	if !found {
+		return false, false
+	}
+	got, err := DatabaseName(shard, readOnly)
+	return readOnly, err == nil && got == name
 }
