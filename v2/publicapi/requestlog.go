@@ -32,8 +32,11 @@ type Record struct {
 	// RequestLog was given WithFullAPIKey.
 	APIKey string
 	// AccountID is the authenticated account's id, or else the
-	// X-Ometria-Account or Ometria-Account-Id header. Like PHP, it is a JSON
-	// number when Authenticate succeeded and a string otherwise.
+	// Ometria-Account-Id header the gateway sets, or else the client's
+	// X-Ometria-Account header. Like PHP, it is a JSON number when
+	// Authenticate succeeded and a string otherwise. PHP prefers
+	// X-Ometria-Account; the gateway's header is preferred here so a client
+	// can't choose the account its failed requests are logged against.
 	AccountID string
 	// Authenticated reports whether AccountID came from Authenticate.
 	Authenticated bool
@@ -156,8 +159,10 @@ func WithFullAPIKey() RequestLogOption {
 }
 
 // WithRequestID sets how a request's id is found, such as api.RequestID.
-// The default is the X-Request-ID header, or a random UUID without one.
-// PHP generated a time-based UUID for every request.
+// The default is the X-Request-ID header if it is at most 64 characters of
+// [A-Za-z0-9._-], and a random UUID otherwise, so a client can't put
+// arbitrary text in the log. PHP generated a time-based UUID for every
+// request.
 func WithRequestID(f func(*http.Request) string) RequestLogOption {
 	return func(c *requestLogConfig) { c.requestID = f }
 }
@@ -191,7 +196,7 @@ func logStateFrom(ctx context.Context) *logState {
 // RequestLog returns middleware that sends sink one Record per request, as
 // PHP's finish hook does, for requests with an API key (the X-Ometria-Auth
 // header, else Authorization) and an account id (the authenticated account,
-// else the X-Ometria-Account header, else Ometria-Account-Id). Put it
+// else the Ometria-Account-Id header, else X-Ometria-Account). Put it
 // outside Routes and Authenticate so it sees their errors.
 //
 // It reads up to WithMaxBodyBytes of the request body before calling next,
@@ -214,7 +219,7 @@ func RequestLog(sink Sink, opts ...RequestLogOption) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			apiKey := headerValue(r.Header, "X-Ometria-Auth", "Authorization")
-			if apiKey == "" || headerValue(r.Header, "X-Ometria-Account", HeaderAccountID) == "" {
+			if apiKey == "" || headerValue(r.Header, HeaderAccountID, "X-Ometria-Account") == "" {
 				// PHP returns early unless both are present; Authenticate
 				// can't supply an account without the account header.
 				next.ServeHTTP(w, r)
@@ -250,7 +255,7 @@ func RequestLog(sink Sink, opts ...RequestLogOption) Middleware {
 					rec.APIKey = rec.APIKey[len(rec.APIKey)-4:]
 				}
 				if !rec.Authenticated {
-					rec.AccountID = headerValue(r.Header, "X-Ometria-Account", HeaderAccountID)
+					rec.AccountID = headerValue(r.Header, HeaderAccountID, "X-Ometria-Account")
 				}
 				if rec.ResponseHTTPCode == 0 {
 					rec.ResponseHTTPCode = http.StatusOK
@@ -299,10 +304,28 @@ type errReader struct{ err error }
 func (e errReader) Read([]byte) (int, error) { return 0, e.err }
 
 func defaultRequestID(r *http.Request) string {
-	if id := r.Header.Get("X-Request-ID"); id != "" {
+	if id := r.Header.Get("X-Request-ID"); validRequestID(id) {
 		return id
 	}
 	return newUUID()
+}
+
+// maxRequestIDLen is the longest X-Request-ID defaultRequestID accepts.
+const maxRequestIDLen = 64
+
+// validRequestID reports whether id is 1 to maxRequestIDLen characters of
+// [A-Za-z0-9._-].
+func validRequestID(id string) bool {
+	if id == "" || len(id) > maxRequestIDLen {
+		return false
+	}
+	for i := 0; i < len(id); i++ {
+		c := id[i]
+		if !('a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || c == '.' || c == '_' || c == '-') {
+			return false
+		}
+	}
+	return true
 }
 
 // newUUID returns a random (version 4) UUID.

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -217,5 +218,45 @@ func TestRecordJSONAuthenticatedAccountIDIsValid(t *testing.T) {
 	b, _ := json.Marshal(Record{AccountID: "+007", Authenticated: true})
 	if !strings.Contains(string(b), `"account_id":7,`) {
 		t.Errorf("expected account_id 7, got %s", b)
+	}
+}
+
+func TestRequestLogPrefersGatewayAccountHeader(t *testing.T) {
+	sink := &MemorySink{}
+	// No scopes header, so Authenticate fails and the account comes from a header.
+	serve(newTestHandler(sink), "GET", "/v2/push/_errors", map[string]string{
+		"X-Ometria-Auth": "k", "X-Ometria-Account": "9", HeaderAccountID: "1",
+	}, "")
+	if recs := sink.Records(); len(recs) != 1 || recs[0].AccountID != "1" || recs[0].Authenticated {
+		t.Errorf("records = %+v", recs)
+	}
+}
+
+func TestDefaultRequestID(t *testing.T) {
+	uuid := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	for _, tt := range []struct {
+		header string
+		keep   bool
+	}{
+		{"req-1", true},
+		{"A.b_C-9", true},
+		{strings.Repeat("a", 64), true},
+		{strings.Repeat("a", 65), false},
+		{"has space", false},
+		{`quote"`, false},
+		{"ünïcode", false},
+		{"", false},
+	} {
+		r := httptest.NewRequest("GET", "/", nil)
+		if tt.header != "" {
+			r.Header.Set("X-Request-ID", tt.header)
+		}
+		got := defaultRequestID(r)
+		if tt.keep && got != tt.header {
+			t.Errorf("%q: got %q, want it kept", tt.header, got)
+		}
+		if !tt.keep && !uuid.MatchString(got) {
+			t.Errorf("%q: got %q, want a UUID", tt.header, got)
+		}
 	}
 }
